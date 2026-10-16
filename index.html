@@ -213,6 +213,28 @@ a{color:var(--stamp)}
 .swatches input:checked+span{border-color:var(--ink)}
 .swatches input:focus-visible+span{outline:2px solid var(--stamp);outline-offset:2px}
 .hbtns{display:flex;gap:6px}
+.scan{position:fixed;inset:0;z-index:70;background:#000;display:flex;flex-direction:column}
+.scan video{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
+.scan .mira{position:absolute;left:50%;top:42%;transform:translate(-50%,-50%);width:min(72vw,300px);aspect-ratio:1;border-radius:18px;box-shadow:0 0 0 100vmax rgba(0,0,0,.45);border:3px solid rgba(255,255,255,.9);transition:all .25s}
+.scan[data-etapa="nota"] .mira{width:min(86vw,420px);aspect-ratio:3/4;top:44%}
+.scan.ok .mira{border-color:#3ddc84;box-shadow:0 0 0 100vmax rgba(0,40,10,.5)}
+.scan .topo{position:relative;padding:calc(14px + env(safe-area-inset-top,0px)) max(16px,env(safe-area-inset-right,0px)) 0 max(16px,env(safe-area-inset-left,0px));display:flex;justify-content:flex-end}
+.scan .rodape{position:absolute;left:0;right:0;bottom:0;padding:18px max(16px,env(safe-area-inset-right,0px)) calc(22px + env(safe-area-inset-bottom,0px)) max(16px,env(safe-area-inset-left,0px));display:flex;flex-direction:column;gap:14px;align-items:center;text-align:center;color:#fff;background:linear-gradient(transparent,rgba(0,0,0,.75) 35%)}
+.scan .rodape b{display:block;font-family:var(--f-display);font-size:18px}
+.scan .rodape span{display:block;font-size:13.5px;opacity:.85}
+.scan .rodape .actions{justify-content:center}
+.scan .btn{background:rgba(255,255,255,.95);color:#1c2227;border-color:transparent}
+.scan .btn.primary{background:#2b4c9b;color:#fff}
+.scan .btn.ghost{background:transparent;color:#fff}
+.choice.big{background:var(--stamp);border-color:var(--stamp);color:var(--stamp-ink)}
+.choice.big span{color:inherit;opacity:.9}
+.choice.big .glyph{background:rgba(255,255,255,.18);color:inherit}
+.minis{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.mini{display:flex;flex-direction:column;gap:2px;border:1px solid var(--rule);border-radius:var(--r);padding:12px;background:var(--sheet);text-align:left;cursor:pointer;position:relative}
+.mini:hover{border-color:var(--stamp)}
+.mini b{font-family:var(--f-display);font-size:14.5px}
+.mini span{font-size:12px;color:var(--muted)}
+.mini input{position:absolute;width:1px;height:1px;opacity:0;pointer-events:none}
 .toast{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(84px + env(safe-area-inset-bottom,0px));background:var(--ink);color:var(--paper);padding:10px 16px;border-radius:999px;font-size:13.5px;font-weight:500;z-index:60;max-width:calc(100% - 32px);text-align:center}
 </style>
 </head>
@@ -275,6 +297,13 @@ a{color:var(--stamp)}
 </div>
 
 <div class="toast" id="toast" hidden></div>
+
+<div class="scan" id="scan" hidden data-etapa="codigo">
+  <video id="scanVideo" playsinline muted autoplay></video>
+  <div class="mira" aria-hidden="true"></div>
+  <div class="topo"><button class="iconbtn" data-scan="cancelar" aria-label="Fechar câmera">✕</button></div>
+  <div class="rodape"><div id="scanDica"></div><div class="actions" id="scanBtns"></div></div>
+</div>
 
 <script>
 (() => {
@@ -569,9 +598,10 @@ async function chamarClaude(content, {signal, modelo, maxTokens=8000, comEsforco
   return (j.content||[]).filter(b=>b.type==="text").map(b=>b.text).join("");
 }
 const sampleLocal = {
-  async json(prompt, {images, signal}={}){
+  async json(prompt, {images, pdf, signal}={}){
     const content = [];
     if (images) content.push({ type:"image", source:{ type:"base64", media_type: images.type || "image/jpeg", data: await blobParaBase64(images) } });
+    if (pdf) content.push({ type:"document", source:{ type:"base64", media_type:"application/pdf", data: await blobParaBase64(pdf) } });
     content.push({ type:"text", text: prompt });
     return lerJSON(await chamarClaude(content, {signal}));
   }
@@ -665,8 +695,12 @@ async function boot(){
   render();
   if ("serviceWorker" in navigator){
     // quando houver versão nova no GitHub, troca e recarrega uma vez sozinho
-    let recarregou = false;
-    navigator.serviceWorker.addEventListener("controllerchange", ()=>{ if (recarregou) return; recarregou = true; location.reload(); });
+    const jaTinha = !!navigator.serviceWorker.controller;   // na primeira instalação não recarrega
+    navigator.serviceWorker.addEventListener("controllerchange", ()=>{
+      if (!jaTinha || window.__recarregar) return;
+      window.__recarregar = true;
+      if ($("shade").hidden && $("scan").hidden) location.reload();   // se estiver lançando algo, espera terminar
+    });
     navigator.serviceWorker.register("sw.js", { updateViaCache:"none" }).then(r=>r.update()).catch(()=>{});
     document.addEventListener("visibilitychange", ()=>{ if (document.visibilityState==="visible") navigator.serviceWorker.getRegistration().then(r=>r?.update()).catch(()=>{}); });
   }
@@ -674,17 +708,23 @@ async function boot(){
 
 /* ---------- folha (sheet) ---------- */
 function abrir(titulo, html){ $("sheetTitle").textContent=titulo; $("sheetBody").innerHTML=html; $("shade").hidden=false; carregarFotos($("sheetBody")); }
-function fechar(){ ctl?.abort(); ctl=null; if(draft?.fotoUrl) URL.revokeObjectURL(draft.fotoUrl); draft=null; $("shade").hidden=true; $("sheetBody").innerHTML=""; }
+function fechar(){ ctl?.abort(); ctl=null; if(draft?.fotoUrl) URL.revokeObjectURL(draft.fotoUrl); draft=null; $("shade").hidden=true; $("sheetBody").innerHTML="";
+  if (window.__recarregar && $("scan").hidden) setTimeout(()=>location.reload(), 900); }
 
 function telaEscolha(){
-  const leitura = true;
+  const cam = !!navigator.mediaDevices?.getUserMedia;
   abrir("Nova nota", `<div class="choices">
-    ${leitura?`<label class="choice"><span class="glyph">QR</span><span><b>Fotografar o cupom</b><span>Lê o QR Code e os itens impressos. Funciona com NFC-e, DANFE e recibos.</span></span>
-      <input type="file" id="fotoIn" accept="image/*" capture="environment"></label>
-    <button class="choice" data-act="colar"><span class="glyph">TXT</span><span><b>Colar o texto da SEFAZ</b><span>Abra o link do QR no celular, copie a página da nota e cole aqui.</span></span></button>`:""}
-    <button class="choice" data-act="manual"><span class="glyph">R$</span><span><b>Lançar à mão</b><span>Para gastos sem nota ou quando a foto não ajudar.</span></span></button>
+    ${cam?`<button class="choice big" data-act="escanear"><span class="glyph">▣</span><span><b>Escanear nota ou boleto</b><span>Aponte a câmera para o QR Code do cupom, o código de barras da DANFE ou de um boleto.</span></span></button>`:""}
+    <div class="minis">
+      <label class="mini"><b>Fotografar a nota</b><span>Lê valor e itens pela foto</span><input type="file" id="fotoIn" accept="image/*" capture="environment"></label>
+      <label class="mini"><b>Importar arquivo</b><span>Foto da galeria, PDF ou XML</span><input type="file" id="arqIn" accept="image/*,application/pdf,.pdf,.xml,text/xml,application/xml"></label>
+      <button class="mini" data-act="codigo"><b>Digitar código</b><span>Chave de acesso ou linha digitável</span></button>
+      <button class="mini" data-act="colar"><b>Colar da SEFAZ</b><span>Texto da página da nota</span></button>
+    </div>
+    <button class="choice" data-act="manual"><span class="glyph">R$</span><span><b>Lançar à mão</b><span>Para gastos sem nota.</span></span></button>
   </div>`);
   $("fotoIn")?.addEventListener("change", e=>{ const f=e.target.files?.[0]; if(f) lerFoto(f); });
+  $("arqIn")?.addEventListener("change", e=>{ const f=e.target.files?.[0]; if(f) importarArquivo(f); });
 }
 
 function telaColar(){
@@ -747,27 +787,40 @@ function erroLeitura(e){
   return m[e?.code] || "A leitura falhou por um problema de conexão. Tente de novo.";
 }
 
-async function lerFoto(file){
+async function lerFoto(file, infoScan){
   draft = { id:newId(), origem:"foto" };
-  const passos = ["Preparando a foto","Procurando o QR Code","Lendo itens e valores"];
+  const passos = ["Preparando a foto","Procurando QR Code e código de barras","Lendo itens e valores"];
   telaProgresso(passos,0);
   let prep;
   try { prep = await prepararImagem(file); }
   catch(e){ telaRevisao(novoRascunho({origem:"manual"}), "Não consegui abrir essa imagem. Preencha os dados à mão."); return; }
   draft.fotoBlob = prep.blob; draft.fotoUrl = prep.previewUrl; draft.qr = prep.qr;
+  telaProgresso(passos,1,prep.previewUrl);
+  let info = infoScan || (prep.qr ? interpretarCodigo(prep.qr) : null);
+  if (!info){ const cod = await lerCodigoDaImagem(prep.previewUrl); if (cod){ info = interpretarCodigo(cod); if (info) draft.qr = cod; } }
+  if (info && (info.tipo==="conta" || info.tipo==="boleto")){
+    const g = await rascunhoDoCodigo(info); telaRevisao(g); return;
+  }
+  if (!cfg.chave){
+    if (info && info.tipo==="nota"){ telaRevisao(await rascunhoDoCodigo(info), "A leitura automática está desligada. Adicione sua chave da API em Ajustes para ler valor e itens da foto."); }
+    else telaRevisao(novoRascunho({origem:"foto"}), erroLeitura({code:"sem_chave"}).replace(" Os dados do QR Code já foram preenchidos.",""));
+    return;
+  }
   telaProgresso(passos,2,prep.previewUrl);
   ctl = new AbortController();
   try {
+    const dica = info?.tipo==="nota" ? `A chave de acesso desta nota é ${info.chave} (${info.doc}).` : (prep.qr ? `O QR Code impresso na nota contém este texto: ${prep.qr}` : "O código da nota não pôde ser lido.");
     const prompt = `A imagem é a foto de um documento fiscal brasileiro de compra (cupom NFC-e, DANFE de NF-e, cupom SAT ou recibo).
-${prep.qr ? `O QR Code impresso na nota contém este texto: ${prep.qr}\n` : "O QR Code não pôde ser decodificado.\n"}
+${dica}
 Extraia os dados da compra. ${formato()}`;
     const r = await sample.json(prompt, { images: prep.blob, signal: ctl.signal });
     ctl=null;
-    telaRevisao(deIA(r, {qr:prep.qr, origem:"foto"}));
+    telaRevisao(await completarComCodigo(deIA(r, {qr:draft.qr, origem:"foto"}), info));
   } catch(e){
     ctl=null;
     if (e?.code==="cancelled") return;
-    telaRevisao(novoRascunho({origem:"foto", qr:prep.qr, chave:chaveDe(prep.qr), url: urlDe(prep.qr)}), erroLeitura(e));
+    if (info?.tipo==="nota") telaRevisao(await rascunhoDoCodigo(info), erroLeitura(e));
+    else telaRevisao(novoRascunho({origem:"foto", qr:draft.qr, chave:chaveDe(draft.qr), url: urlDe(draft.qr)}), erroLeitura(e));
   }
 }
 
@@ -809,11 +862,361 @@ function deIA(r, {qr, origem}){
   return g;
 }
 
+/* ---------- captura: códigos fiscais, boletos, CNPJ, arquivos e câmera ---------- */
+const soDig = s => String(s||"").replace(/\D/g,"");
+const MODELOS_DOC = { "55":"NF-e", "65":"NFC-e", "59":"SAT", "57":"CT-e" };
+
+function dvChave(c43){ let s=0,p=2; for (let i=c43.length-1;i>=0;i--){ s+=Number(c43[i])*p; p=p===9?2:p+1; } const r=s%11; return r<2?0:11-r; }
+function analisarChave(c){
+  c = soDig(c);
+  if (c.length!==44 || dvChave(c.slice(0,43))!==Number(c[43])) return null;
+  const mod = c.slice(20,22); if (!MODELOS_DOC[mod]) return null;
+  return { chave:c, ano:2000+Number(c.slice(2,4)), mes:Number(c.slice(4,6)), cnpj:c.slice(6,20), modelo:mod, doc:MODELOS_DOC[mod] };
+}
+
+function mod10(n){ let s=0,m=2; for (let i=n.length-1;i>=0;i--){ const x=Number(n[i])*m; s+=Math.floor(x/10)+x%10; m=m===2?1:2; } return (10-s%10)%10; }
+function mod11Banco(n){ let s=0,p=2; for (let i=n.length-1;i>=0;i--){ s+=Number(n[i])*p; p=p===9?2:p+1; } const r=11-s%11; return (r===0||r>9)?1:r; }
+function mod11Arrec(n){ let s=0,p=2; for (let i=n.length-1;i>=0;i--){ s+=Number(n[i])*p; p=p===9?2:p+1; } const r=s%11; return r<2?0:11-r; }
+
+const BANCOS = {"001":"Banco do Brasil","033":"Santander","041":"Banrisul","077":"Inter","104":"Caixa","208":"BTG Pactual","237":"Bradesco","260":"Nubank","290":"PagBank","323":"Mercado Pago","336":"C6 Bank","341":"Itaú","380":"PicPay","422":"Safra","748":"Sicredi","756":"Sicoob"};
+const SEGMENTOS = {"1":"Tributo municipal","2":"Conta de água","3":"Conta de luz ou gás","4":"Telefone ou internet","5":"Tributo","6":"Carnê","7":"Multa de trânsito","9":"Boleto"};
+
+function vencimentoDoFator(f){
+  if (!f) return null;
+  const hoje = new Date(); const cand = [];
+  const d1 = new Date(1997,9,7); d1.setDate(d1.getDate()+f); cand.push(d1);
+  if (f>=1000){ const d2 = new Date(2022,4,29); d2.setDate(d2.getDate()+f); cand.push(d2); }
+  cand.sort((a,b)=>Math.abs(a-hoje)-Math.abs(b-hoje));
+  const d = cand[0];
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
+}
+
+function analisarBoleto(cb){
+  cb = soDig(cb); if (cb.length!==44) return null;
+  if (cb[0]==="8"){
+    const ref = cb[2]; if (!"6789".includes(ref)) return null;
+    const semDV = cb.slice(0,3)+cb.slice(4), dv = Number(cb[3]);
+    const ok = (ref==="6"||ref==="7") ? mod10(semDV)===dv : mod11Arrec(semDV)===dv;
+    if (!ok) return null;
+    const valor = (ref==="6"||ref==="8") ? Number(cb.slice(4,15))/100 : 0;
+    return { tipo:"conta", codigo:cb, segmento:cb[1], nome:SEGMENTOS[cb[1]]||"Conta", valor, vencimento:null };
+  }
+  if (cb[3]!=="9") return null;
+  if (mod11Banco(cb.slice(0,4)+cb.slice(5))!==Number(cb[4])) return null;
+  return { tipo:"boleto", codigo:cb, banco:cb.slice(0,3), nome:`Boleto ${BANCOS[cb.slice(0,3)]||"bancário"}`,
+    valor:Number(cb.slice(9,19))/100, vencimento:vencimentoDoFator(Number(cb.slice(5,9))) };
+}
+
+function linhaParaBarras(l){
+  l = soDig(l);
+  if (l.length===47) return l.slice(0,4)+l[32]+l.slice(33,47)+l.slice(4,9)+l.slice(10,20)+l.slice(21,31);
+  if (l.length===48 && l[0]==="8") return l.slice(0,11)+l.slice(12,23)+l.slice(24,35)+l.slice(36,47);
+  return l;
+}
+
+function hexParaTexto(h){ try { return decodeURIComponent(h.replace(/(..)/g,"%$1")); } catch(_){ return ""; } }
+
+/* Interpreta qualquer código lido ou digitado: QR da NFC-e/SAT, chave de 44 dígitos, código de barras de DANFE ou boleto, linha digitável */
+function interpretarCodigo(texto){
+  const t = String(texto||"").trim();
+  if (!t) return null;
+  const url = /^https?:\/\//i.test(t) ? t : null;
+  const extra = {};
+  let chave = null;
+  if (url || t.includes("|") || /chNFe=/i.test(t)){
+    let p = null;
+    try { const u = new URL(url || ("https://x/?"+t)); p = u.searchParams.get("p"); const ch=u.searchParams.get("chNFe"); if (ch) chave=ch;
+      const v = u.searchParams.get("vNF"); if (v) extra.valor = toNum(v);
+      const dh = u.searchParams.get("dhEmi"); if (dh){ const iso = /^[0-9a-f]+$/i.test(dh) ? hexParaTexto(dh) : dh; if (/^\d{4}-\d{2}-\d{2}/.test(iso)) extra.data = iso.slice(0,10); }
+    } catch(_){}
+    const partes = (p || (t.includes("|") ? t : "")).split("|");
+    if (partes[0] && soDig(partes[0]).length===44) chave = chave || partes[0];
+    if (partes.length>=8 && /^\d{1,2}$/.test(partes[3])) { extra.dia = Number(partes[3]); extra.valor = toNum(partes[4]); }   // NFC-e em contingência
+    if (/^\d{14}$/.test(partes[1]||"")) { const d=partes[1]; extra.data=`${d.slice(0,4)}-${d.slice(4,6)}-${d.slice(6,8)}`; extra.valor = toNum(partes[2]); }   // CF-e SAT
+    if (!chave) chave = chaveDe(t);
+  }
+  const dig = soDig(t);
+  if (!chave && dig.length===44) chave = dig;
+  const nota = chave ? analisarChave(chave) : null;
+  if (nota) return { tipo:"nota", ...nota, url, ...extra };
+  if (dig.length===44 || dig.length===47 || dig.length===48){ const b = analisarBoleto(linhaParaBarras(dig)); if (b) return b; }
+  if (url) return { tipo:"link", url };
+  return null;
+}
+
+/* CNPJ → nome e atividade, por serviços públicos gratuitos */
+const CNAE_CAT = [
+  [["4711","4712","4721","4722","4723","4724","4729"],"Mercado"],
+  [["4731","4732"],"Combustível"],
+  [["4771","4772","4773","4774","86"],"Farmácia e saúde"],
+  [["5611","5612","5620"],"Restaurante e lanche"],
+  [["4520","4530","4541","4542","4543"],"Veículo"],
+  [["4741","4742","4743","4744","4753","4754","4755","4756","4757","4759"],"Casa"],
+  [["4761","4762","85"],"Educação e livros"],
+  [["4781","4782"],"Vestuário"],
+  [["35","36","61","64","65","66"],"Serviços e contas"],
+];
+function categoriaDoCNAE(cnae){
+  const c = soDig(cnae); if (!c) return null;
+  for (const [pref, cat] of CNAE_CAT) if (pref.some(p=>c.startsWith(p)) && CATS.some(x=>x.k===cat)) return cat;
+  return null;
+}
+function nomeBonito(n){
+  n = String(n||"").replace(/\s+(LTDA|ME|EPP|EIRELI|S\/?A|S\.A\.?|MEI)\.?$/i,"").replace(/\s+(LTDA|ME|EPP|EIRELI)\.?$/i,"").trim();
+  if (!n || n!==n.toUpperCase()) return n;
+  const peq = new Set(["de","da","do","das","dos","e"]);
+  return n.toLowerCase().split(" ").map((w,i)=> (i>0 && peq.has(w)) ? w : w.charAt(0).toUpperCase()+w.slice(1)).join(" ");
+}
+async function buscarCNPJ(cnpj){
+  cnpj = soDig(cnpj); if (cnpj.length!==14 || /^0{3}/.test(cnpj)) return null;
+  let cache = {}; try { cache = JSON.parse(localStorage.getItem("caderneta.cnpj")||"{}"); } catch(_){}
+  if (cache[cnpj]) return cache[cnpj];
+  const fontes = [`https://brasilapi.com.br/api/cnpj/v1/${cnpj}`, `https://minhareceita.org/${cnpj}`];
+  for (const u of fontes){
+    try {
+      const ctlr = new AbortController(); const t = setTimeout(()=>ctlr.abort(), 5000);
+      const r = await fetch(u, { signal: ctlr.signal }); clearTimeout(t);
+      if (!r.ok) continue;
+      const j = await r.json();
+      const out = { nome: nomeBonito(j.nome_fantasia || j.razao_social || ""), cnae: String(j.cnae_fiscal || "") };
+      if (!out.nome) continue;
+      cache[cnpj] = out; try { localStorage.setItem("caderneta.cnpj", JSON.stringify(cache)); } catch(_){}
+      return out;
+    } catch(_){}
+  }
+  return null;
+}
+const fmtCNPJ = c => { c=soDig(c); return c.length===14 ? `${c.slice(0,2)}.${c.slice(2,5)}.${c.slice(5,8)}/${c.slice(8,12)}-${c.slice(12)}` : c; };
+
+/* Monta o lançamento a partir de um código, sem precisar de leitura por IA */
+async function rascunhoDoCodigo(info){
+  if (info.tipo==="conta" || info.tipo==="boleto"){
+    const cat = info.segmento==="7" && CATS.some(c=>c.k==="Veículo") ? "Veículo" : (CATS.some(c=>c.k==="Serviços e contas") ? "Serviços e contas" : catReserva());
+    const g = novoRascunho({ origem:"boleto", estabelecimento:info.nome, valor:info.valor||0, categoria:cat, tipo:"Boleto",
+      obs: info.vencimento ? `Vencimento ${fmtCurta(info.vencimento)}` : "", codigoBoleto:info.codigo });
+    g._aviso = info.valor ? "Valor lido do código de barras. Confira o nome e salve." : "Este código não traz o valor. Digite o valor pago.";
+    return g;
+  }
+  const hoje = today();
+  let data = info.data || hoje;
+  if (!info.data){
+    const am = `${info.ano}-${String(info.mes).padStart(2,"0")}`;
+    if (info.dia) data = `${am}-${String(info.dia).padStart(2,"0")}`;
+    else if (am!==hoje.slice(0,7)) data = `${am}-01`;
+  }
+  const g = novoRascunho({ origem:"codigo", chave:info.chave, url:info.url||null, cnpj:fmtCNPJ(info.cnpj), data, valor:info.valor||0, tipo:info.doc });
+  const emp = await buscarCNPJ(info.cnpj);
+  if (emp){ g.estabelecimento = emp.nome; const c = categoriaDoCNAE(emp.cnae); if (c) g.categoria = c; }
+  const av = [];
+  if (!emp) av.push("Não consegui buscar o nome pelo CNPJ. Digite o nome do estabelecimento.");
+  if (!info.valor) av.push("O código desta nota não traz o valor. Digite o total.");
+  if (!info.data && !info.dia && data.slice(0,7)!==hoje.slice(0,7)) av.push("Confira o dia da compra.");
+  g._aviso = av.join(" ");
+  return g;
+}
+
+/* Junta a leitura por IA com os dados vindos do código e do CNPJ */
+async function completarComCodigo(g, info){
+  if (!info || info.tipo!=="nota") return g;
+  g.chave = g.chave || info.chave; g.url = g.url || info.url || null; g.tipo = g.tipo || info.doc;
+  if (!g.cnpj) g.cnpj = fmtCNPJ(info.cnpj);
+  const emp = await buscarCNPJ(info.cnpj);
+  if (emp){ if (!g.estabelecimento) g.estabelecimento = emp.nome; const c = categoriaDoCNAE(emp.cnae); if (c) g.categoria = c; }
+  if (!g.valor && info.valor) g.valor = info.valor;
+  return g;
+}
+
+/* ZXing: lê QR Code, Code 128 (DANFE) e ITF (boletos) */
+let zxingCarregando = null;
+function carregarZXing(){
+  if (window.ZXing) return Promise.resolve(window.ZXing);
+  return zxingCarregando ||= carregarScript("https://cdn.jsdelivr.net/npm/@zxing/library@0.21.3/umd/index.min.js").then(()=>window.ZXing);
+}
+function leitorZXing(Z){
+  const hints = new Map();
+  hints.set(Z.DecodeHintType.POSSIBLE_FORMATS, [Z.BarcodeFormat.QR_CODE, Z.BarcodeFormat.CODE_128, Z.BarcodeFormat.ITF]);
+  hints.set(Z.DecodeHintType.TRY_HARDER, true);
+  return new Z.BrowserMultiFormatReader(hints, 250);
+}
+async function lerCodigoDaImagem(url){
+  try { const Z = await carregarZXing(); const r = await leitorZXing(Z).decodeFromImageUrl(url); return r?.getText?.() || r?.text || null; }
+  catch(_){ return null; }
+}
+
+/* Escâner ao vivo pela câmera: jsQR para QR Code, ZXing para Code 128 (DANFE) e ITF (boletos) */
+let scan = null;
+function fecharScanner(){
+  if (scan){ scan.ativo = false; clearTimeout(scan.timer); }
+  try { scan?.stream?.getTracks().forEach(t=>t.stop()); } catch(_){}
+  const v = $("scanVideo"); if (v) v.srcObject = null;
+  $("scan").hidden = true; document.body.style.overflow = ""; scan = null;
+}
+function capturarQuadro(){
+  const v = $("scanVideo"); if (!v || !v.videoWidth) return null;
+  const sc = Math.min(1, 1800/Math.max(v.videoWidth, v.videoHeight));
+  const cv = document.createElement("canvas"); cv.width = Math.round(v.videoWidth*sc); cv.height = Math.round(v.videoHeight*sc);
+  cv.getContext("2d").drawImage(v, 0, 0, cv.width, cv.height);
+  return new Promise(ok=>cv.toBlob(ok, "image/jpeg", 0.85));
+}
+function etapaScanner(etapa, info){
+  const s = $("scan"); s.dataset.etapa = etapa;
+  const dica = $("scanDica"), bts = $("scanBtns");
+  if (etapa==="codigo"){
+    dica.innerHTML = `<b>Aponte para o QR Code do cupom</b><span>ou para o código de barras da DANFE ou do boleto</span>`;
+    bts.innerHTML = `<button class="btn" data-scan="foto">Fotografar a nota</button><button class="btn ghost" data-scan="cancelar">Cancelar</button>`;
+  } else if (etapa==="nota"){
+    dica.innerHTML = `<b>✓ ${esc(info.doc)} identificada</b><span>Agora enquadre a nota inteira e toque em Fotografar para ler o valor e os itens</span>`;
+    bts.innerHTML = `<button class="btn primary" data-scan="foto">Fotografar</button><button class="btn" data-scan="pular">Pular e digitar o valor</button>`;
+  }
+}
+function lerQuadro(Z){
+  const v = $("scanVideo"); if (!v || !v.videoWidth) return null;
+  const sc = Math.min(1, 1280/Math.max(v.videoWidth, v.videoHeight));
+  const w = Math.round(v.videoWidth*sc), h = Math.round(v.videoHeight*sc);
+  const cv = scan.cv ||= document.createElement("canvas"); cv.width = w; cv.height = h;
+  const cx = cv.getContext("2d", {willReadFrequently:true}); cx.drawImage(v, 0, 0, w, h);
+  try { if (window.jsQR){ const d = cx.getImageData(0,0,w,h); const q = window.jsQR(d.data, w, h, {inversionAttempts:"dontInvert"}); if (q?.data) return q.data; } } catch(_){}
+  if (Z){
+    try {
+      if (!scan.leitor1D){ const hints = new Map(); hints.set(Z.DecodeHintType.POSSIBLE_FORMATS, [Z.BarcodeFormat.CODE_128, Z.BarcodeFormat.ITF]); hints.set(Z.DecodeHintType.TRY_HARDER, true);
+        scan.leitor1D = new Z.MultiFormatReader(); scan.leitor1D.setHints(hints); }
+      const bmp = new Z.BinaryBitmap(new Z.HybridBinarizer(new Z.HTMLCanvasElementLuminanceSource(cv)));
+      return scan.leitor1D.decode(bmp).getText();
+    } catch(_){}
+  }
+  return null;
+}
+async function abrirScanner(){
+  fechar();
+  if (!navigator.mediaDevices?.getUserMedia){ toast("Este aparelho não liberou a câmera. Use Fotografar a nota."); telaEscolha(); return; }
+  $("scan").hidden = false; document.body.style.overflow = "hidden";
+  const meu = scan = { info:null, ativo:true };
+  etapaScanner("codigo");
+  $("scanDica").innerHTML = `<b>Abrindo a câmera…</b>`;
+  let Z = null;
+  try {
+    const [stream, z] = await Promise.all([
+      navigator.mediaDevices.getUserMedia({ audio:false, video:{ facingMode:{ideal:"environment"}, width:{ideal:1920}, height:{ideal:1080} } }),
+      carregarZXing().catch(()=>null)
+    ]);
+    if (scan!==meu){ stream.getTracks().forEach(t=>t.stop()); return; }
+    Z = z; meu.stream = stream;
+    const v = $("scanVideo"); v.srcObject = stream; await v.play().catch(()=>{});
+    etapaScanner("codigo");
+  } catch(e){
+    if (scan===meu) fecharScanner();
+    toast(e?.name==="NotAllowedError" ? "A câmera foi bloqueada. Libere em Ajustes do iPhone > Safari > Câmera." : "Não consegui abrir a câmera. Use Fotografar a nota.");
+    telaEscolha(); return;
+  }
+  const passo = () => {
+    if (scan!==meu || !meu.ativo || meu.info) return;
+    const texto = lerQuadro(Z);
+    const info = texto ? interpretarCodigo(texto) : null;
+    if (info && info.tipo!=="link"){
+      meu.info = info;
+      try { navigator.vibrate?.(60); } catch(_){}
+      $("scan").classList.add("ok"); setTimeout(()=>$("scan")?.classList.remove("ok"), 500);
+      aposCodigo(info); return;
+    }
+    meu.timer = setTimeout(passo, 160);
+  };
+  passo();
+}
+async function aposCodigo(info){
+  if (info.tipo==="nota" && !info.valor && cfg.chave){
+    etapaScanner("nota", info);   // a câmera continua aberta; novas leituras são ignoradas
+    return;
+  }
+  fecharScanner();
+  draft = { id:newId() };
+  telaProgresso(["Código lido","Buscando o estabelecimento"],1);
+  telaRevisao(await rascunhoDoCodigo(info));
+}
+async function scannerFoto(){
+  const blob = await capturarQuadro();
+  const info = scan?.info || null;
+  fecharScanner();
+  if (!blob){ toast("Não consegui capturar a imagem. Tente de novo."); return; }
+  lerFoto(new File([blob], "nota.jpg", {type:"image/jpeg"}), info);
+}
+async function scannerPular(){
+  const info = scan?.info; fecharScanner();
+  draft = { id:newId() };
+  telaProgresso(["Código lido","Buscando o estabelecimento"],1);
+  telaRevisao(await rascunhoDoCodigo(info));
+}
+
+/* Digitar código */
+function telaCodigo(){
+  abrir("Digitar código", `<form id="codForm" novalidate>
+    <div class="field"><label for="codTxt">Chave de acesso ou linha digitável</label>
+      <textarea id="codTxt" inputmode="numeric" style="min-height:90px" placeholder="44 dígitos da chave da nota, ou os 47 ou 48 números do boleto"></textarea></div>
+    <p class="muted" style="margin:0;font-size:12.5px">A chave de acesso fica embaixo do código de barras da DANFE ou no rodapé do cupom. Espaços e pontos não atrapalham.</p>
+    <div id="codErr" class="notice err" hidden></div>
+    <div class="actions"><button class="btn primary" type="submit">Continuar</button><button class="btn ghost" type="button" data-act="voltar">Voltar</button></div>
+  </form>`);
+  $("codForm").addEventListener("submit", async e=>{
+    e.preventDefault();
+    const info = interpretarCodigo($("codTxt").value);
+    if (!info || info.tipo==="link"){ const er=$("codErr"); er.textContent="Esse número não confere. Verifique se digitou todos os dígitos."; er.hidden=false; return; }
+    draft = { id:newId() };
+    telaProgresso(["Código conferido","Buscando o estabelecimento"],1);
+    telaRevisao(await rascunhoDoCodigo(info));
+  });
+}
+
+/* Importar arquivo: foto da galeria, PDF da nota ou XML da NF-e */
+async function importarArquivo(f){
+  const nome = (f.name||"").toLowerCase();
+  if (nome.endsWith(".xml") || /xml/.test(f.type)) return lerXML(f);
+  if (nome.endsWith(".pdf") || f.type==="application/pdf") return lerPDF(f);
+  if ((f.type||"").startsWith("image/")) return lerFoto(f);
+  toast("Use uma foto, um PDF ou o XML da nota.");
+}
+function tag(el, nome){ return el ? el.getElementsByTagNameNS("*", nome)[0] || null : null; }
+const txt = (el, nome) => (tag(el,nome)?.textContent || "").trim();
+async function lerXML(f){
+  draft = { id:newId(), origem:"xml" };
+  try {
+    const doc = new DOMParser().parseFromString(await f.text(), "application/xml");
+    if (doc.getElementsByTagName("parsererror").length) throw 0;
+    const inf = tag(doc,"infNFe") || tag(doc,"infCFe"); if (!inf) throw 0;
+    const emit = tag(inf,"emit"), ide = tag(inf,"ide");
+    let chave = soDig(inf.getAttribute("Id")) || soDig(txt(doc,"chNFe"));
+    const dt = txt(ide,"dhEmi") || txt(ide,"dEmi");
+    const data = /^\d{4}-\d{2}-\d{2}/.test(dt) ? dt.slice(0,10) : /^\d{8}$/.test(dt) ? `${dt.slice(0,4)}-${dt.slice(4,6)}-${dt.slice(6,8)}` : today();
+    const itens = [...inf.getElementsByTagNameNS("*","det")].map(d=>{ const p=tag(d,"prod");
+      return { descricao: txt(p,"xProd").slice(0,120), qtd: toNum(txt(p,"qCom"))||1, valor: toNum(txt(p,"vProd")) || toNum(txt(d,"vItem")) }; }).filter(i=>i.descricao).slice(0,80);
+    const valor = toNum(txt(inf,"vNF")) || toNum(txt(inf,"vCFe")) || itens.reduce((s,i)=>s+i.valor,0);
+    const TP = {"01":"Dinheiro","03":"Cartão de crédito","04":"Cartão de débito","17":"Pix"};
+    const g = novoRascunho({ origem:"xml", estabelecimento: nomeBonito(txt(emit,"xFant") || txt(emit,"xNome")), cnpj: fmtCNPJ(txt(emit,"CNPJ")),
+      data, valor: Math.round(valor*100)/100, itens, chave: chave.length===44 ? chave : null, pagamento: TP[txt(inf,"tPag")]||"",
+      tipo: tag(doc,"infCFe") ? "SAT" : (chave.slice(20,22)==="65" ? "NFC-e" : "NF-e") });
+    const emp = await buscarCNPJ(txt(emit,"CNPJ")); const c = emp && categoriaDoCNAE(emp.cnae); if (c) g.categoria = c;
+    g._aviso = "Dados importados do XML da nota.";
+    telaRevisao(g);
+  } catch(_){ telaRevisao(novoRascunho({origem:"manual"}), "Não consegui ler esse XML. Confira se é o XML da nota fiscal."); }
+}
+async function lerPDF(f){
+  draft = { id:newId(), origem:"pdf" };
+  if (!cfg.chave){ telaRevisao(novoRascunho({origem:"manual"}), erroLeitura({code:"sem_chave"}).replace(" Os dados do QR Code já foram preenchidos.","")); return; }
+  if (f.size > 20*1024*1024){ telaRevisao(novoRascunho({origem:"manual"}), "Esse PDF é grande demais. Use um arquivo de até 20 MB."); return; }
+  telaProgresso(["Abrindo o PDF","Lendo itens e valores"],1);
+  ctl = new AbortController();
+  try {
+    const r = await sampleLocal.json(`O PDF é um documento fiscal brasileiro de compra (DANFE de NF-e, NFC-e, cupom ou recibo). Extraia os dados da compra. ${formato()}`, { pdf:f, signal:ctl.signal });
+    ctl = null;
+    let g = deIA(r, {origem:"pdf"});
+    const info = g.chave ? interpretarCodigo(g.chave) : null;
+    telaRevisao(await completarComCodigo(g, info));
+  } catch(e){ ctl=null; if (e?.code==="cancelled") return; telaRevisao(novoRascunho({origem:"pdf"}), erroLeitura(e)); }
+}
+
 /* ---------- revisão / edição ---------- */
 function telaRevisao(g, erro){
   if (!draft) draft = { id:g.id };
   draft.g = g;
-  const dup = g.chave ? state.gastos.find(x=>x.chave===g.chave && x.id!==g.id) : null;
+  const dup = g.chave ? state.gastos.find(x=>x.chave===g.chave && x.id!==g.id) : (g.codigoBoleto ? state.gastos.find(x=>x.codigoBoleto===g.codigoBoleto && x.id!==g.id) : null);
   const editando = state.gastos.some(x=>x.id===g.id);
   abrir(editando?"Editar lançamento":"Conferir e salvar", `
     ${erro?`<div class="notice err">${esc(erro)}</div>`:""}
@@ -847,7 +1250,7 @@ function telaRevisao(g, erro){
     const out = { id:g.id, estabelecimento:$("fEst").value.trim().slice(0,100), cnpj:g.cnpj||"", data, valor:Math.round(valor*100)/100,
       categoria:$("fCat").value, pagamento:$("fPag").value, itens:g.itens||[], chave:g.chave||null, url:g.url||null, tipo:g.tipo||null,
       obs:$("fObs").value.trim().slice(0,200),
-      origem:g.origem||"manual", fixoId:g.fixoId||antigo?.fixoId||null, fixoMes:g.fixoMes||antigo?.fixoMes||null, fotoId: antigo?.fotoId || null, exemplo: !!antigo?.exemplo, criadoEm: antigo?.criadoEm || Date.now() };
+      origem:g.origem||"manual", codigoBoleto:g.codigoBoleto||antigo?.codigoBoleto||null, fixoId:g.fixoId||antigo?.fixoId||null, fixoMes:g.fixoMes||antigo?.fixoMes||null, fotoId: antigo?.fotoId || null, exemplo: !!antigo?.exemplo, criadoEm: antigo?.criadoEm || Date.now() };
     const btn=$("saveBtn"); btn.disabled=true; btn.textContent="Salvando…";
     try {
       if (draft?.fotoBlob && assets && !out.fotoId){
@@ -1280,6 +1683,8 @@ document.addEventListener("click", async e=>{
   else if (a==="limites") telaLimites();
   else if (a==="categorias") telaCategorias();
   else if (a==="ajustes") telaAjustes();
+  else if (a==="escanear") abrirScanner();
+  else if (a==="codigo") telaCodigo();
   else if (a==="manual") { draft={id:newId()}; telaRevisao(novoRascunho()); }
   else if (a==="fechar") fechar();
   else if (a==="parar") { ctl?.abort(); ctl=null; const q=draft?.qr; telaRevisao(novoRascunho({origem:draft?.origem||"manual", qr:q, chave:chaveDe(q), url:urlDe(q)})); }
@@ -1289,6 +1694,12 @@ document.addEventListener("click", async e=>{
   else if (a==="apagarSim") { const id=draft.id; try{ await apagar(id); fechar(); toast("Lançamento apagado"); }catch(_){ toast("Não foi possível apagar agora"); } }
 });
 $("fab").addEventListener("click", telaEscolha);
+$("scan").addEventListener("click", e=>{ const b=e.target.closest("[data-scan]"); if(!b) return;
+  const a=b.dataset.scan;
+  if (a==="cancelar"){ fecharScanner(); }
+  else if (a==="foto") scannerFoto();
+  else if (a==="pular") scannerPular();
+});
 $("closeSheet").addEventListener("click", fechar);
 $("shade").addEventListener("click", e=>{ if(e.target===$("shade")) fechar(); });
 document.addEventListener("keydown", e=>{ if(e.key==="Escape" && !$("shade").hidden) fechar(); });

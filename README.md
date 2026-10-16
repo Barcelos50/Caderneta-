@@ -4,6 +4,19 @@ App pessoal de controle de gastos: lê o cupom fiscal pela foto (QR Code + leitu
 
 Funciona direto no navegador do iPhone, com ícone na tela de início, sem depender do app Claude. Os lançamentos ficam guardados **só no seu aparelho**.
 
+## Formas de lançar uma nota
+
+| Opção | O que faz | Precisa da chave da API? |
+|---|---|---|
+| **Escanear nota ou boleto** | Câmera ao vivo: lê o QR Code do cupom (NFC-e/SAT), o código de barras da DANFE e de boletos. Busca o nome do estabelecimento pelo CNPJ e sugere a categoria pela atividade da empresa. Em boletos e contas de consumo, o valor sai do próprio código. | Não. Com a chave, oferece fotografar a nota para ler valor e itens |
+| **Fotografar a nota** | Lê valor, itens e forma de pagamento pela foto | Sim |
+| **Importar arquivo** | XML da NF-e (lido no aparelho, completo), PDF da nota ou foto da galeria | Só para PDF e foto |
+| **Digitar código** | Chave de acesso (44 dígitos) ou linha digitável do boleto | Não |
+| **Colar da SEFAZ** | Texto copiado da página de consulta da nota | Sim |
+| **Lançar à mão** | Para gastos sem nota | Não |
+
+Notas e boletos repetidos são avisados antes de salvar.
+
 ## O que tem nesta pasta
 
 | Arquivo | Para que serve |

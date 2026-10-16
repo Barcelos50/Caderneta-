@@ -1,10 +1,11 @@
 // Caderneta: guarda o app no aparelho para abrir mesmo sem internet.
-const VERSAO = "caderneta-v4";
+const VERSAO = "caderneta-v5";
 const APP = ["./", "./index.html", "./manifest.webmanifest", "./icon-180.png", "./icon-192.png", "./icon-512.png"];
 const LIBS = [
   "https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js",
   "https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js",
-  "https://cdn.jsdelivr.net/npm/jspdf-autotable@3.8.2/dist/jspdf.plugin.autotable.min.js"
+  "https://cdn.jsdelivr.net/npm/jspdf-autotable@3.8.2/dist/jspdf.plugin.autotable.min.js",
+  "https://cdn.jsdelivr.net/npm/@zxing/library@0.21.3/umd/index.min.js"
 ];
 
 self.addEventListener("install", e => {
@@ -40,6 +41,8 @@ self.addEventListener("fetch", e => {
     })());
     return;
   }
+  const LIB_HOSTS = ["cdn.jsdelivr.net", "fonts.googleapis.com", "fonts.gstatic.com"];
+  if (!LIB_HOSTS.includes(url.hostname)) return;              // outros serviços (CNPJ etc.): direto pela internet
   e.respondWith((async () => {                                 // bibliotecas e fontes: guardadas depois do 1º uso
     const hit = await caches.match(req);
     if (hit) return hit;
