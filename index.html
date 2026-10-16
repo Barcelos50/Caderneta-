@@ -215,9 +215,9 @@ a{color:var(--stamp)}
 .hbtns{display:flex;gap:6px}
 .scan{position:fixed;inset:0;z-index:70;background:#000;display:flex;flex-direction:column}
 .scan video{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
-.scan .mira{position:absolute;left:50%;top:42%;transform:translate(-50%,-50%);width:min(72vw,300px);aspect-ratio:1;border-radius:18px;box-shadow:0 0 0 100vmax rgba(0,0,0,.45);border:3px solid rgba(255,255,255,.9);transition:all .25s}
-.scan[data-etapa="nota"] .mira{width:min(86vw,420px);aspect-ratio:3/4;top:44%}
-.scan.ok .mira{border-color:#3ddc84;box-shadow:0 0 0 100vmax rgba(0,40,10,.5)}
+.scan canvas{position:absolute;inset:0;width:100%;height:100%;pointer-events:none}
+.scan.flash::after{content:"";position:absolute;inset:0;background:#fff;animation:flash .35s ease-out forwards;pointer-events:none}
+@keyframes flash{from{opacity:.85}to{opacity:0}}
 .scan .topo{position:relative;padding:calc(14px + env(safe-area-inset-top,0px)) max(16px,env(safe-area-inset-right,0px)) 0 max(16px,env(safe-area-inset-left,0px));display:flex;justify-content:flex-end}
 .scan .rodape{position:absolute;left:0;right:0;bottom:0;padding:18px max(16px,env(safe-area-inset-right,0px)) calc(22px + env(safe-area-inset-bottom,0px)) max(16px,env(safe-area-inset-left,0px));display:flex;flex-direction:column;gap:14px;align-items:center;text-align:center;color:#fff;background:linear-gradient(transparent,rgba(0,0,0,.75) 35%)}
 .scan .rodape b{display:block;font-family:var(--f-display);font-size:18px}
@@ -300,7 +300,7 @@ a{color:var(--stamp)}
 
 <div class="scan" id="scan" hidden data-etapa="codigo">
   <video id="scanVideo" playsinline muted autoplay></video>
-  <div class="mira" aria-hidden="true"></div>
+  <canvas id="scanCanvas" aria-hidden="true"></canvas>
   <div class="topo"><button class="iconbtn" data-scan="cancelar" aria-label="Fechar câmera">✕</button></div>
   <div class="rodape"><div id="scanDica"></div><div class="actions" id="scanBtns"></div></div>
 </div>
@@ -714,7 +714,7 @@ function fechar(){ ctl?.abort(); ctl=null; if(draft?.fotoUrl) URL.revokeObjectUR
 function telaEscolha(){
   const cam = !!navigator.mediaDevices?.getUserMedia;
   abrir("Nova nota", `<div class="choices">
-    ${cam?`<button class="choice big" data-act="escanear"><span class="glyph">▣</span><span><b>Escanear nota ou boleto</b><span>Aponte a câmera para o QR Code do cupom, o código de barras da DANFE ou de um boleto.</span></span></button>`:""}
+    ${cam?`<button class="choice big" data-act="escanear"><span class="glyph">▣</span><span><b>Escanear nota</b><span>Aponte a câmera para a nota. O app encontra a nota, enquadra e tira a foto sozinho.</span></span></button>`:""}
     <div class="minis">
       <label class="mini"><b>Fotografar a nota</b><span>Lê valor e itens pela foto</span><input type="file" id="fotoIn" accept="image/*" capture="environment"></label>
       <label class="mini"><b>Importar arquivo</b><span>Foto da galeria, PDF ou XML</span><input type="file" id="arqIn" accept="image/*,application/pdf,.pdf,.xml,text/xml,application/xml"></label>
@@ -855,7 +855,7 @@ function deIA(r, {qr, origem}){
   const avisos = [];
   if (o.legivel===false) avisos.push("Parte da nota não estava legível.");
   if (o.obs) avisos.push(String(o.obs).slice(0,200));
-  const g = novoRascunho({ origem, estabelecimento:String(o.estabelecimento??"").slice(0,100), cnpj:String(o.cnpj??"").slice(0,20),
+  const g = novoRascunho({ origem, estabelecimento:nomeBonito(String(o.estabelecimento??"")).slice(0,100), cnpj:String(o.cnpj??"").slice(0,20),
     data, valor:Math.round(valor*100)/100, categoria:cat, pagamento: PAG.includes(o.pagamento)?o.pagamento:"",
     itens, chave: chaveDe(o.chave) || chaveDe(qr), url: urlDe(qr), tipo: o.tipo || null });
   g._aviso = avisos.join(" ");
@@ -1043,107 +1043,198 @@ async function lerCodigoDaImagem(url){
   catch(_){ return null; }
 }
 
-/* Escâner ao vivo pela câmera: jsQR para QR Code, ZXing para Code 128 (DANFE) e ITF (boletos) */
+/* Escâner de documento: acha a nota no vídeo, enquadra, endireita e fotografa sozinho */
 let scan = null;
+
+/* --- detecção da folha (frame reduzido, luminância, Otsu, maior região clara) --- */
+function detectarFolha(lum, w, h){
+  // desfoque 3x3 simples
+  const b = new Uint8ClampedArray(w*h);
+  for (let y=1; y<h-1; y++) for (let x=1; x<w-1; x++){
+    let s=0; for (let dy=-1; dy<=1; dy++){ const o=(y+dy)*w+x; s+=lum[o-1]+lum[o]+lum[o+1]; }
+    b[y*w+x] = s/9;
+  }
+  // limiar de Otsu
+  const hist = new Array(256).fill(0); let n=0;
+  for (let y=1; y<h-1; y++) for (let x=1; x<w-1; x++){ hist[b[y*w+x]]++; n++; }
+  let soma=0; for (let i=0;i<256;i++) soma+=i*hist[i];
+  let sB=0, wB=0, melhor=0, lim=128;
+  for (let t=0; t<256; t++){
+    wB+=hist[t]; if (!wB) continue; const wF=n-wB; if (!wF) break;
+    sB+=t*hist[t]; const mB=sB/wB, mF=(soma-sB)/wF; const v=wB*wF*(mB-mF)*(mB-mF);
+    if (v>melhor){ melhor=v; lim=t; }
+  }
+  // contraste mínimo entre papel e fundo
+  let sf=0,nf=0,sb=0,nb=0;
+  for (let i=0;i<256;i++){ if (i>lim){ sf+=i*hist[i]; nf+=hist[i]; } else { sb+=i*hist[i]; nb+=hist[i]; } }
+  if (!nf || !nb || (sf/nf)-(sb/nb) < 28) return null;
+  // maior região clara (4-vizinhança)
+  const mask = new Uint8Array(w*h); for (let i=0;i<w*h;i++) mask[i] = b[i]>lim ? 1 : 0;
+  const lab = new Int32Array(w*h); let atual=0, maior=null;
+  const pilha = new Int32Array(w*h);
+  for (let i=0;i<w*h;i++){
+    if (!mask[i] || lab[i]) continue;
+    atual++; let topo=0; pilha[topo++]=i; lab[i]=atual;
+    let area=0, minx=w, maxx=0, miny=h, maxy=0, tl=1e9, br=-1e9, tr=-1e9, bl=1e9, ptl=0, pbr=0, ptr=0, pbl=0;
+    while (topo){
+      const p=pilha[--topo]; const x=p%w, y=(p/w)|0; area++;
+      if (x<minx) minx=x; if (x>maxx) maxx=x; if (y<miny) miny=y; if (y>maxy) maxy=y;
+      const s1=x+y, s2=x-y;
+      if (s1<tl){tl=s1;ptl=p;} if (s1>br){br=s1;pbr=p;} if (s2>tr){tr=s2;ptr=p;} if (s2<bl){bl=s2;pbl=p;}
+      if (x>0 && mask[p-1] && !lab[p-1]){ lab[p-1]=atual; pilha[topo++]=p-1; }
+      if (x<w-1 && mask[p+1] && !lab[p+1]){ lab[p+1]=atual; pilha[topo++]=p+1; }
+      if (y>0 && mask[p-w] && !lab[p-w]){ lab[p-w]=atual; pilha[topo++]=p-w; }
+      if (y<h-1 && mask[p+w] && !lab[p+w]){ lab[p+w]=atual; pilha[topo++]=p+w; }
+    }
+    if (!maior || area>maior.area) maior = {area,minx,maxx,miny,maxy,ptl,ptr,pbr,pbl};
+  }
+  if (!maior) return null;
+  const M = maior, borda = 2;
+  const tocaBorda = M.minx<=borda || M.miny<=borda || M.maxx>=w-1-borda || M.maxy>=h-1-borda;
+  const fr = M.area/(w*h);
+  if (fr < 0.07 || fr > 0.92) return null;
+  const pt = p => ({x:p%w, y:(p/w)|0});
+  const q = [pt(M.ptl), pt(M.ptr), pt(M.pbr), pt(M.pbl)];
+  const areaQ = Math.abs((q[0].x*q[1].y-q[1].x*q[0].y)+(q[1].x*q[2].y-q[2].x*q[1].y)+(q[2].x*q[3].y-q[3].x*q[2].y)+(q[3].x*q[0].y-q[0].x*q[3].y))/2;
+  if (areaQ < 1 || M.area/areaQ < 0.82) return null;     // precisa parecer um retângulo
+  return { q, tocaBorda, fr };
+}
+
+/* --- homografia e endireitamento --- */
+function resolver(A, bv){
+  const n=bv.length; const M=A.map((r,i)=>[...r, bv[i]]);
+  for (let c=0;c<n;c++){
+    let p=c; for (let r=c+1;r<n;r++) if (Math.abs(M[r][c])>Math.abs(M[p][c])) p=r;
+    [M[c],M[p]]=[M[p],M[c]];
+    for (let r=0;r<n;r++){ if (r===c) continue; const f=M[r][c]/M[c][c]; for (let k=c;k<=n;k++) M[r][k]-=f*M[c][k]; }
+  }
+  return M.map((r,i)=>r[n]/r[i]);
+}
+function homografia(de, para){
+  const A=[], bv=[];
+  for (let i=0;i<4;i++){
+    const {x,y}=de[i], {x:u,y:v}=para[i];
+    A.push([x,y,1,0,0,0,-u*x,-u*y]); bv.push(u);
+    A.push([0,0,0,x,y,1,-v*x,-v*y]); bv.push(v);
+  }
+  const h = resolver(A,bv); return [...h,1];
+}
+const dist = (a,b) => Math.hypot(a.x-b.x, a.y-b.y);
+function endireitar(fonte, q){
+  // amplia o quadrilátero 1,5% para não cortar as bordas
+  const cx=(q[0].x+q[1].x+q[2].x+q[3].x)/4, cy=(q[0].y+q[1].y+q[2].y+q[3].y)/4;
+  q = q.map(p=>({ x: Math.max(0,Math.min(fonte.width-1, cx+(p.x-cx)*1.015)), y: Math.max(0,Math.min(fonte.height-1, cy+(p.y-cy)*1.015)) }));
+  let W = Math.max(dist(q[0],q[1]), dist(q[3],q[2])), H = Math.max(dist(q[0],q[3]), dist(q[1],q[2]));
+  const k = Math.min(1, 1800/Math.max(W,H)); W=Math.round(W*k); H=Math.round(H*k);
+  const Hm = homografia([{x:0,y:0},{x:W,y:0},{x:W,y:H},{x:0,y:H}], q);
+  const sx = fonte.getContext("2d").getImageData(0,0,fonte.width,fonte.height), src=sx.data, fw=fonte.width, fh=fonte.height;
+  const out = document.createElement("canvas"); out.width=W; out.height=H;
+  const oc = out.getContext("2d"), od = oc.createImageData(W,H), dst=od.data;
+  for (let y=0;y<H;y++){
+    for (let x=0;x<W;x++){
+      const d = Hm[6]*x+Hm[7]*y+1, u=(Hm[0]*x+Hm[1]*y+Hm[2])/d, v=(Hm[3]*x+Hm[4]*y+Hm[5])/d;
+      const x0=Math.floor(u), y0=Math.floor(v); const o=(y*W+x)*4;
+      if (x0<0||y0<0||x0>=fw-1||y0>=fh-1){ dst[o]=dst[o+1]=dst[o+2]=255; dst[o+3]=255; continue; }
+      const ax=u-x0, ay=v-y0, i00=(y0*fw+x0)*4, i10=i00+4, i01=i00+fw*4, i11=i01+4;
+      for (let c=0;c<3;c++) dst[o+c] = (src[i00+c]*(1-ax)+src[i10+c]*ax)*(1-ay) + (src[i01+c]*(1-ax)+src[i11+c]*ax)*ay;
+      dst[o+3]=255;
+    }
+  }
+  oc.putImageData(od,0,0);
+  return out;
+}
+
+/* --- interface --- */
 function fecharScanner(){
-  if (scan){ scan.ativo = false; clearTimeout(scan.timer); }
+  if (scan){ scan.ativo=false; clearTimeout(scan.timer); }
   try { scan?.stream?.getTracks().forEach(t=>t.stop()); } catch(_){}
-  const v = $("scanVideo"); if (v) v.srcObject = null;
-  $("scan").hidden = true; document.body.style.overflow = ""; scan = null;
+  const v=$("scanVideo"); if (v) v.srcObject=null;
+  const c=$("scanCanvas"); if (c) c.getContext("2d").clearRect(0,0,c.width,c.height);
+  $("scan").hidden=true; $("scan").classList.remove("ok","flash"); document.body.style.overflow=""; scan=null;
 }
-function capturarQuadro(){
-  const v = $("scanVideo"); if (!v || !v.videoWidth) return null;
-  const sc = Math.min(1, 1800/Math.max(v.videoWidth, v.videoHeight));
-  const cv = document.createElement("canvas"); cv.width = Math.round(v.videoWidth*sc); cv.height = Math.round(v.videoHeight*sc);
-  cv.getContext("2d").drawImage(v, 0, 0, cv.width, cv.height);
-  return new Promise(ok=>cv.toBlob(ok, "image/jpeg", 0.85));
+function dicaScanner(t, s){ $("scanDica").innerHTML = `<b>${t}</b>${s?`<span>${s}</span>`:""}`; }
+function desenharQuad(q, estavel){
+  const cv=$("scanCanvas"), v=$("scanVideo"); const r=cv.getBoundingClientRect(), dpr=window.devicePixelRatio||1;
+  if (cv.width!==Math.round(r.width*dpr)){ cv.width=Math.round(r.width*dpr); cv.height=Math.round(r.height*dpr); }
+  const cx=cv.getContext("2d"); cx.clearRect(0,0,cv.width,cv.height);
+  if (!q || !v.videoWidth) return;
+  const esc=Math.max(cv.width/v.videoWidth, cv.height/v.videoHeight), ox=(cv.width-v.videoWidth*esc)/2, oy=(cv.height-v.videoHeight*esc)/2;
+  const P=q.map(p=>({x:p.x*esc+ox, y:p.y*esc+oy}));
+  cx.beginPath(); P.forEach((p,i)=>i?cx.lineTo(p.x,p.y):cx.moveTo(p.x,p.y)); cx.closePath();
+  cx.fillStyle = estavel ? "rgba(61,220,132,.22)" : "rgba(43,76,155,.18)"; cx.fill();
+  cx.lineWidth = 3*dpr; cx.strokeStyle = estavel ? "#3ddc84" : "#ffffff"; cx.lineJoin="round"; cx.stroke();
 }
-function etapaScanner(etapa, info){
-  const s = $("scan"); s.dataset.etapa = etapa;
-  const dica = $("scanDica"), bts = $("scanBtns");
-  if (etapa==="codigo"){
-    dica.innerHTML = `<b>Aponte para o QR Code do cupom</b><span>ou para o código de barras da DANFE ou do boleto</span>`;
-    bts.innerHTML = `<button class="btn" data-scan="foto">Fotografar a nota</button><button class="btn ghost" data-scan="cancelar">Cancelar</button>`;
-  } else if (etapa==="nota"){
-    dica.innerHTML = `<b>✓ ${esc(info.doc)} identificada</b><span>Agora enquadre a nota inteira e toque em Fotografar para ler o valor e os itens</span>`;
-    bts.innerHTML = `<button class="btn primary" data-scan="foto">Fotografar</button><button class="btn" data-scan="pular">Pular e digitar o valor</button>`;
-  }
-}
-function lerQuadro(Z){
-  const v = $("scanVideo"); if (!v || !v.videoWidth) return null;
-  const sc = Math.min(1, 1280/Math.max(v.videoWidth, v.videoHeight));
-  const w = Math.round(v.videoWidth*sc), h = Math.round(v.videoHeight*sc);
-  const cv = scan.cv ||= document.createElement("canvas"); cv.width = w; cv.height = h;
-  const cx = cv.getContext("2d", {willReadFrequently:true}); cx.drawImage(v, 0, 0, w, h);
-  try { if (window.jsQR){ const d = cx.getImageData(0,0,w,h); const q = window.jsQR(d.data, w, h, {inversionAttempts:"dontInvert"}); if (q?.data) return q.data; } } catch(_){}
-  if (Z){
-    try {
-      if (!scan.leitor1D){ const hints = new Map(); hints.set(Z.DecodeHintType.POSSIBLE_FORMATS, [Z.BarcodeFormat.CODE_128, Z.BarcodeFormat.ITF]); hints.set(Z.DecodeHintType.TRY_HARDER, true);
-        scan.leitor1D = new Z.MultiFormatReader(); scan.leitor1D.setHints(hints); }
-      const bmp = new Z.BinaryBitmap(new Z.HybridBinarizer(new Z.HTMLCanvasElementLuminanceSource(cv)));
-      return scan.leitor1D.decode(bmp).getText();
-    } catch(_){}
-  }
-  return null;
+function lerLuminancia(v, alvo){
+  const k = alvo/Math.max(v.videoWidth, v.videoHeight), w=Math.round(v.videoWidth*k), h=Math.round(v.videoHeight*k);
+  const cv = scan.mini ||= document.createElement("canvas"); cv.width=w; cv.height=h;
+  const cx = cv.getContext("2d",{willReadFrequently:true}); cx.drawImage(v,0,0,w,h);
+  const d = cx.getImageData(0,0,w,h).data, lum=new Uint8ClampedArray(w*h);
+  for (let i=0,j=0;i<lum.length;i++,j+=4) lum[i]=(d[j]*77+d[j+1]*150+d[j+2]*29)>>8;
+  return {lum,w,h,k};
 }
 async function abrirScanner(){
   fechar();
   if (!navigator.mediaDevices?.getUserMedia){ toast("Este aparelho não liberou a câmera. Use Fotografar a nota."); telaEscolha(); return; }
-  $("scan").hidden = false; document.body.style.overflow = "hidden";
-  const meu = scan = { info:null, ativo:true };
-  etapaScanner("codigo");
-  $("scanDica").innerHTML = `<b>Abrindo a câmera…</b>`;
-  let Z = null;
+  $("scan").hidden=false; document.body.style.overflow="hidden";
+  const meu = scan = { ativo:true, hist:[] };
+  dicaScanner("Abrindo a câmera…");
+  $("scanBtns").innerHTML = `<button class="btn" data-scan="foto">Capturar agora</button><button class="btn ghost" data-scan="cancelar">Cancelar</button>`;
   try {
-    const [stream, z] = await Promise.all([
-      navigator.mediaDevices.getUserMedia({ audio:false, video:{ facingMode:{ideal:"environment"}, width:{ideal:1920}, height:{ideal:1080} } }),
-      carregarZXing().catch(()=>null)
-    ]);
+    const stream = await navigator.mediaDevices.getUserMedia({ audio:false, video:{ facingMode:{ideal:"environment"}, width:{ideal:1920}, height:{ideal:1440} } });
     if (scan!==meu){ stream.getTracks().forEach(t=>t.stop()); return; }
-    Z = z; meu.stream = stream;
-    const v = $("scanVideo"); v.srcObject = stream; await v.play().catch(()=>{});
-    etapaScanner("codigo");
+    meu.stream=stream; const v=$("scanVideo"); v.srcObject=stream; await v.play().catch(()=>{});
   } catch(e){
     if (scan===meu) fecharScanner();
     toast(e?.name==="NotAllowedError" ? "A câmera foi bloqueada. Libere em Ajustes do iPhone > Safari > Câmera." : "Não consegui abrir a câmera. Use Fotografar a nota.");
     telaEscolha(); return;
   }
+  dicaScanner("Procurando a nota…", "Coloque a nota sobre uma superfície escura e enquadre ela inteira");
+  const PRECISA = 8;          // quadros seguidos parados (~1 segundo)
   const passo = () => {
-    if (scan!==meu || !meu.ativo || meu.info) return;
-    const texto = lerQuadro(Z);
-    const info = texto ? interpretarCodigo(texto) : null;
-    if (info && info.tipo!=="link"){
-      meu.info = info;
-      try { navigator.vibrate?.(60); } catch(_){}
-      $("scan").classList.add("ok"); setTimeout(()=>$("scan")?.classList.remove("ok"), 500);
-      aposCodigo(info); return;
+    if (scan!==meu || !meu.ativo) return;
+    const v=$("scanVideo");
+    if (v.videoWidth){
+      const {lum,w,h,k} = lerLuminancia(v, 320);
+      const det = detectarFolha(lum,w,h);
+      if (det && !det.tocaBorda){
+        const q = det.q.map(p=>({x:p.x/k, y:p.y/k}));
+        const ant = meu.hist[meu.hist.length-1];
+        const mov = ant ? Math.max(...q.map((p,i)=>dist(p,ant[i]))) / v.videoWidth : 1;
+        if (mov < 0.022) meu.hist.push(q); else meu.hist = [q];
+        const estavel = meu.hist.length >= PRECISA;
+        desenharQuad(q, meu.hist.length>=3);
+        if (estavel){ capturarDocumento(q); return; }
+        dicaScanner(meu.hist.length>=3 ? "Segure firme…" : "Nota encontrada", meu.hist.length>=3 ? "Tirando a foto sozinho" : "Mantenha o celular parado");
+      } else {
+        meu.hist = []; desenharQuad(det && det.q.map(p=>({x:p.x/k, y:p.y/k})), false);
+        if (det && det.tocaBorda) dicaScanner("Afaste um pouco o celular", "A nota inteira precisa aparecer na tela");
+        else dicaScanner("Procurando a nota…", "Coloque a nota sobre uma superfície escura e enquadre ela inteira");
+      }
     }
-    meu.timer = setTimeout(passo, 160);
+    meu.timer = setTimeout(passo, 110);
   };
   passo();
 }
-async function aposCodigo(info){
-  if (info.tipo==="nota" && !info.valor && cfg.chave){
-    etapaScanner("nota", info);   // a câmera continua aberta; novas leituras são ignoradas
-    return;
-  }
-  fecharScanner();
-  draft = { id:newId() };
-  telaProgresso(["Código lido","Buscando o estabelecimento"],1);
-  telaRevisao(await rascunhoDoCodigo(info));
+async function capturarDocumento(q){
+  const meu = scan; if (!meu) return; meu.ativo=false;
+  const v=$("scanVideo");
+  const f = document.createElement("canvas"); f.width=v.videoWidth; f.height=v.videoHeight; f.getContext("2d").drawImage(v,0,0);
+  $("scan").classList.add("flash"); dicaScanner("✓ Nota capturada");
+  try { navigator.vibrate?.(60); } catch(_){}
+  let saida = f;
+  if (q){ try { saida = endireitar(f, q); } catch(_){ saida = f; } }
+  // procura o QR Code / código de barras também no quadro original, em resolução cheia
+  let info = null;
+  try { const d=f.getContext("2d").getImageData(0,0,f.width,f.height); const r=window.jsQR?.(d.data,f.width,f.height,{inversionAttempts:"attemptBoth"}); if (r?.data) info = interpretarCodigo(r.data); } catch(_){}
+  if (!info){ const cod = await lerCodigoDaImagem(f.toDataURL("image/jpeg",0.92)); if (cod) info = interpretarCodigo(cod); }
+  if (info?.tipo==="link") info = null;
+  const blob = await new Promise(ok=>saida.toBlob(ok,"image/jpeg",0.88));
+  setTimeout(()=>{ fecharScanner(); lerFoto(new File([blob],"nota.jpg",{type:"image/jpeg"}), info); }, 150);
 }
-async function scannerFoto(){
-  const blob = await capturarQuadro();
-  const info = scan?.info || null;
-  fecharScanner();
-  if (!blob){ toast("Não consegui capturar a imagem. Tente de novo."); return; }
-  lerFoto(new File([blob], "nota.jpg", {type:"image/jpeg"}), info);
-}
-async function scannerPular(){
-  const info = scan?.info; fecharScanner();
-  draft = { id:newId() };
-  telaProgresso(["Código lido","Buscando o estabelecimento"],1);
-  telaRevisao(await rascunhoDoCodigo(info));
+function capturarManual(){
+  if (!scan) return;
+  const q = scan.hist?.length ? scan.hist[scan.hist.length-1] : null;
+  capturarDocumento(q);
 }
 
 /* Digitar código */
@@ -1697,8 +1788,7 @@ $("fab").addEventListener("click", telaEscolha);
 $("scan").addEventListener("click", e=>{ const b=e.target.closest("[data-scan]"); if(!b) return;
   const a=b.dataset.scan;
   if (a==="cancelar"){ fecharScanner(); }
-  else if (a==="foto") scannerFoto();
-  else if (a==="pular") scannerPular();
+  else if (a==="foto") capturarManual();
 });
 $("closeSheet").addEventListener("click", fechar);
 $("shade").addEventListener("click", e=>{ if(e.target===$("shade")) fechar(); });

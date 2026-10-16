@@ -1,6 +1,6 @@
 # Caderneta de Gastos
 
-App pessoal de controle de gastos: lê o cupom fiscal pela foto (QR Code + leitura automática), separa por categorias com limites, soma os gastos fixos do mês e exporta em PDF ou CSV.
+App pessoal de controle de gastos: escaneia o cupom fiscal com enquadramento automático, separa por categorias com limites, soma os gastos fixos do mês e exporta em PDF ou CSV.
 
 Funciona direto no navegador do iPhone, com ícone na tela de início, sem depender do app Claude. Os lançamentos ficam guardados **só no seu aparelho**.
 
@@ -8,7 +8,7 @@ Funciona direto no navegador do iPhone, com ícone na tela de início, sem depen
 
 | Opção | O que faz | Precisa da chave da API? |
 |---|---|---|
-| **Escanear nota ou boleto** | Câmera ao vivo: lê o QR Code do cupom (NFC-e/SAT), o código de barras da DANFE e de boletos. Busca o nome do estabelecimento pelo CNPJ e sugere a categoria pela atividade da empresa. Em boletos e contas de consumo, o valor sai do próprio código. | Não. Com a chave, oferece fotografar a nota para ler valor e itens |
+| **Escanear nota** | A câmera encontra a nota sozinha, marca as bordas, endireita e tira a foto quando o celular fica parado. Lê o QR Code ou o código de barras da foto, busca o nome do estabelecimento pelo CNPJ e sugere a categoria. Boletos e contas de consumo saem com o valor direto do código. | Para ler valor e itens de cupons, sim |
 | **Fotografar a nota** | Lê valor, itens e forma de pagamento pela foto | Sim |
 | **Importar arquivo** | XML da NF-e (lido no aparelho, completo), PDF da nota ou foto da galeria | Só para PDF e foto |
 | **Digitar código** | Chave de acesso (44 dígitos) ou linha digitável do boleto | Não |
@@ -16,6 +16,8 @@ Funciona direto no navegador do iPhone, com ícone na tela de início, sem depen
 | **Lançar à mão** | Para gastos sem nota | Não |
 
 Notas e boletos repetidos são avisados antes de salvar.
+
+**Dica para o escâner:** coloque a nota sobre uma superfície mais escura que o papel (mesa, pasta, capa do celular). É o contraste que permite achar as bordas.
 
 ## O que tem nesta pasta
 
