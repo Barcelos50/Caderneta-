@@ -1816,12 +1816,14 @@ function montarPDF(JsPDF, d){
       d.gastos.map(g=>[fmtCurta(g.data), (g.estabelecimento||"Sem nome")+(g.obs?`\n${g.obs}`:""), g.categoria, g.pagamento||"-", R(g.valor)]),
       { foot:[[{content:"Total dos lançamentos",colSpan:4}, R(d.variaveis)]], columnStyles:{0:{cellWidth:22},4:{halign:"right",cellWidth:28}},
         didParseCell: c=>{ if(c.section==="foot" && c.column.index===4) c.cell.styles.halign="right"; } });
+  let paginasSoFotos = new Set();
   if (d.fotos?.length){
     // grade em colunas: cada foto entra na coluna mais baixa; nova página quando nenhuma comporta
-    const H = doc.internal.pageSize.getHeight(), COLS = 3, GAP = 5, TOPO = 24, BASE = H - 14;
-    const cw = (W - 2*M - GAP*(COLS-1)) / COLS, LEG = 9;
-    const novaPagina = (primeira) => { doc.addPage(); doc.setFont("helvetica","bold"); doc.setFontSize(11); doc.setTextColor(...TINTA);
-      doc.text(primeira ? "Comprovantes" : "Comprovantes (continuação)", M, 18); return Array(COLS).fill(TOPO); };
+    // páginas só com as fotos das notas, sem títulos, legendas ou numeração
+    const H = doc.internal.pageSize.getHeight(), COLS = 3, GAP = 5, TOPO = M, BASE = H - M;
+    const cw = (W - 2*M - GAP*(COLS-1)) / COLS, LEG = GAP;
+    paginasSoFotos = new Set();
+    const novaPagina = () => { doc.addPage(); paginasSoFotos.add(doc.getNumberOfPages()); return Array(COLS).fill(TOPO); };
     let cols = novaPagina(true);
     for (const f of d.fotos){
       let iw = cw, ih = cw * f.h / f.w;
@@ -1831,15 +1833,13 @@ function montarPDF(JsPDF, d){
       const x = M + c*(cw+GAP) + (cw-iw)/2, y = cols[c];
       doc.setDrawColor(...LINHA); doc.setLineWidth(0.2); doc.rect(x-0.3, y-0.3, iw+0.6, ih+0.6);
       doc.addImage(f.data, "JPEG", x, y, iw, ih, undefined, "FAST");
-      doc.setFont("helvetica","normal"); doc.setFontSize(7.5); doc.setTextColor(...CINZA);
-      const leg = doc.splitTextToSize(f.legenda, cw)[0];
-      doc.text(leg, M + c*(cw+GAP), y + ih + 4);
       cols[c] = y + ih + LEG;
     }
   }
   const n = doc.getNumberOfPages();
-  for (let i=1;i<=n;i++){ doc.setPage(i); doc.setFontSize(8); doc.setTextColor(...CINZA);
-    doc.text(`Página ${i} de ${n}`, W-M, doc.internal.pageSize.getHeight()-8, {align:"right"}); }
+  const nRel = n - paginasSoFotos.size;
+  for (let i=1;i<=nRel;i++){ doc.setPage(i); doc.setFontSize(8); doc.setTextColor(...CINZA);
+    doc.text(`Página ${i} de ${nRel}`, W-M, doc.internal.pageSize.getHeight()-8, {align:"right"}); }
   return doc.output("arraybuffer");
 }
 
