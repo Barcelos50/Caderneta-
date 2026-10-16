@@ -1,5 +1,5 @@
 // Caderneta: guarda o app no aparelho para abrir mesmo sem internet.
-const VERSAO = "caderneta-v2";
+const VERSAO = "caderneta-v3";
 const APP = ["./", "./index.html", "./manifest.webmanifest", "./icon-180.png", "./icon-192.png", "./icon-512.png"];
 const LIBS = [
   "https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js",

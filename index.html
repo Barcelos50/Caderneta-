@@ -337,9 +337,8 @@ function render(){
       usado += v; limTot += state.limites[k];
       if (v > state.limites[k]) estouradas.push(k);
     });
-    sub += estouradas.length
-      ? `<span class="chip warn" style="background:var(--danger-soft);color:var(--danger)">${estouradas.length===1 ? `${esc(estouradas[0])} passou do limite` : `${estouradas.length} categorias passaram do limite`}</span>`
-      : `<span class="chip ok">Dentro dos limites · resta ${brl.format(Math.max(0,limTot-usado))}</span>`;
+    if (estouradas.length)
+      sub += `<span class="chip warn" style="background:var(--danger-soft);color:var(--danger)">${estouradas.length===1 ? `${esc(estouradas[0])} passou do limite` : `${estouradas.length} categorias passaram do limite`}</span>`;
   }
   if (exemplos) sub += `<span class="chip ex">contém exemplos</span>`;
   $("subline").innerHTML = sub;
