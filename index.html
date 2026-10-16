@@ -235,6 +235,11 @@ a{color:var(--stamp)}
 .mini b{font-family:var(--f-display);font-size:14.5px}
 .mini span{font-size:12px;color:var(--muted)}
 .mini input{position:absolute;width:1px;height:1px;opacity:0;pointer-events:none}
+.catsel{display:flex;flex-wrap:wrap;gap:8px}
+.catsel label{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--rule);border-radius:999px;padding:6px 11px;font-size:13px;cursor:pointer;background:var(--sheet)}
+.catsel label:has(input:checked){border-color:var(--stamp);background:var(--stamp-soft)}
+.catsel input{width:16px;height:16px;margin:0;accent-color:var(--stamp)}
+.linkbtn{border:0;background:none;color:var(--stamp);font-weight:600;font-size:12.5px;padding:0;cursor:pointer}
 .toast{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(84px + env(safe-area-inset-bottom,0px));background:var(--ink);color:var(--paper);padding:10px 16px;border-radius:999px;font-size:13.5px;font-weight:500;z-index:60;max-width:calc(100% - 32px);text-align:center}
 </style>
 </head>
@@ -1617,12 +1622,13 @@ function mesesDoPeriodo(per){
   return out;
 }
 
-function dadosExport(per){
+function dadosExport(per, cats){
   const meses = mesesDoPeriodo(per);
   const set = new Set(meses);
-  const gastos = state.gastos.filter(g=>g.data && set.has(g.data.slice(0,7))).sort((a,b)=>a.data.localeCompare(b.data));
+  const okCat = k => !cats || cats.has(k);
+  const gastos = state.gastos.filter(g=>g.data && set.has(g.data.slice(0,7)) && okCat(g.categoria)).sort((a,b)=>a.data.localeCompare(b.data));
   const porMes = meses.map(ym=>{
-    const fx = fixosDoMes(ym);
+    const fx = fixosDoMes(ym).filter(x=>okCat(x.categoria));
     const v = gastos.filter(g=>g.data.slice(0,7)===ym).reduce((s,g)=>s+g.valor,0);
     const f = fx.reduce((s,x)=>s+x.valorMes,0);
     return { ym, variaveis:v, fixos:f, total:v+f, fx };
@@ -1633,6 +1639,7 @@ function dadosExport(per){
   const total = porMes.reduce((s,m)=>s+m.total,0);
   return { per, meses, gastos, porMes, porCat:Object.entries(porCat).sort((a,b)=>b[1]-a[1]), total,
     variaveis: porMes.reduce((s,m)=>s+m.variaveis,0), fixos: porMes.reduce((s,m)=>s+m.fixos,0),
+    cats: cats ? [...cats] : null,
     titulo: per==="mes" ? mesNome(state.mes) : (porMes.length ? `${mesNome(porMes[0].ym)} a ${mesNome(porMes[porMes.length-1].ym)}` : mesNome(state.mes)) };
 }
 
@@ -1642,23 +1649,35 @@ function telaExportar(){
       <div class="seg" role="radiogroup" aria-label="Período">
         <button type="button" data-per="mes" aria-pressed="true">${esc(mesNome(state.mes))}</button>
         <button type="button" data-per="tudo" aria-pressed="false">Tudo</button></div></div>
-    <p class="muted" style="margin:0;font-size:13px">O PDF traz o resumo, os totais por categoria, os gastos fixos e todos os lançamentos. O CSV abre no Excel ou no Google Planilhas.</p>
+    <div class="field"><label style="display:flex;justify-content:space-between;align-items:center">Categorias
+        <span><button type="button" class="linkbtn" data-sel="todas">Todas</button> · <button type="button" class="linkbtn" data-sel="nenhuma">Nenhuma</button></span></label>
+      <div class="catsel">${CATS.map((c,i)=>`<label for="expCat${i}"><input type="checkbox" id="expCat${i}" value="${esc(c.k)}" checked><span class="dot" style="background:${catColor(c.k)}"></span>${esc(c.k)}</label>`).join("")}</div></div>
+    <label class="switch" for="expFotos"><input type="checkbox" id="expFotos" checked>
+      <span><b>Incluir as fotos das notas no PDF</b><span>Ficam no final, agrupadas quantas couberem em cada página</span></span></label>
+    <p class="muted" style="margin:0;font-size:13px">O PDF traz o resumo, os totais por categoria, os gastos fixos e os lançamentos das categorias escolhidas. O CSV abre no Excel ou no Google Planilhas.</p>
     <div id="expErr" class="notice err" hidden></div>
     <div class="actions"><button class="btn primary" type="button" data-fmt="pdf">Baixar PDF</button><button class="btn" type="button" data-fmt="csv">Baixar CSV</button></div>
   </form>`);
   let per = "mes";
   $("expForm").addEventListener("click", async e=>{
+    const sel = e.target.closest("[data-sel]");
+    if (sel){ $("expForm").querySelectorAll(".catsel input").forEach(i=>i.checked = sel.dataset.sel==="todas"); return; }
     const p = e.target.closest("[data-per]");
     if (p){ per=p.dataset.per; $("expForm").querySelectorAll("[data-per]").forEach(b=>b.setAttribute("aria-pressed", String(b===p))); return; }
     const b = e.target.closest("[data-fmt]"); if(!b) return;
     const err=$("expErr"); err.hidden=true;
-    const d = dadosExport(per);
+    const marcadas = [...$("expForm").querySelectorAll(".catsel input:checked")].map(i=>i.value);
+    if (!marcadas.length){ err.textContent="Escolha pelo menos uma categoria."; err.hidden=false; return; }
+    const todas = marcadas.length===CATS.length && !state.gastos.some(g=>!CATS.some(c=>c.k===g.categoria));
+    const d = dadosExport(per, todas ? null : new Set(marcadas));
+    d.comFotos = $("expFotos").checked;
     if (!d.gastos.length && !d.fixos){ err.textContent="Não há gastos neste período."; err.hidden=false; return; }
     const label=b.textContent; b.disabled=true; b.textContent="Gerando…";
     try {
       const sufixo = per==="mes" ? state.mes : "completo";
       if (b.dataset.fmt==="csv") await downloads.save({ filename:`caderneta-${sufixo}.csv`, data:"﻿"+gerarCSV(d) });
-      else { const pdf = await gerarPDF(d); await downloads.save({ filename:`caderneta-${sufixo}.pdf`, data:pdf }); }
+      else { if (d.comFotos){ b.textContent="Preparando as fotos…"; d.fotos = await fotosParaPDF(d.gastos); b.textContent="Gerando…"; }
+        const pdf = await gerarPDF(d); await downloads.save({ filename:`caderneta-${sufixo}.pdf`, data:pdf }); }
       fechar(); toast("Arquivo pronto");
     } catch(e2){
       b.disabled=false; b.textContent=label;
@@ -1686,6 +1705,23 @@ function gerarCSV(d){
 function carregarScript(src){
   return new Promise((ok,no)=>{ const s=document.createElement("script"); s.src=src; s.onload=ok; s.onerror=()=>no(new Error("pdf_lib")); document.head.appendChild(s); });
 }
+async function fotosParaPDF(gastos){
+  const out = [];
+  for (const g of gastos){
+    if (!g.fotoId) continue;
+    try {
+      const url = await urlFoto(g.fotoId); if (!url) continue;
+      const img = await new Promise((ok,no)=>{ const i=new Image(); i.onload=()=>ok(i); i.onerror=no; i.src=url; });
+      const k = Math.min(1, 1400/Math.max(img.naturalWidth, img.naturalHeight));
+      const cv = document.createElement("canvas"); cv.width=Math.round(img.naturalWidth*k); cv.height=Math.round(img.naturalHeight*k);
+      const cx = cv.getContext("2d"); cx.fillStyle="#fff"; cx.fillRect(0,0,cv.width,cv.height); cx.drawImage(img,0,0,cv.width,cv.height);
+      out.push({ data: cv.toDataURL("image/jpeg",0.72), w:cv.width, h:cv.height,
+        legenda: `${fmtCurta(g.data)} · ${g.estabelecimento||"Sem nome"}`, valor: g.valor });
+    } catch(_){}
+  }
+  return out;
+}
+
 async function gerarPDF(d){
   if (!window.jspdf?.jsPDF) await carregarScript("https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js");
   if (!window.jspdf?.jsPDF?.API?.autoTable) await carregarScript("https://cdn.jsdelivr.net/npm/jspdf-autotable@3.8.2/dist/jspdf.plugin.autotable.min.js");
@@ -1706,7 +1742,7 @@ function montarPDF(JsPDF, d){
   doc.text("Caderneta de Gastos", M, 20);
   doc.setFont("helvetica","normal"); doc.setFontSize(11); doc.setTextColor(...CINZA);
   const tit = d.titulo.charAt(0).toUpperCase()+d.titulo.slice(1);
-  doc.text(tit, M, 27);
+  doc.text(tit + (d.cats ? `  ·  ${d.cats.length===1 ? d.cats[0] : d.cats.length+" categorias"}` : ""), M, 27);
   doc.setFontSize(8.5);
   doc.text(`Gerado em ${new Date().toLocaleDateString("pt-BR")}`, W-M, 20, {align:"right"});
   doc.setDrawColor(...LINHA); doc.line(M, 31, W-M, 31);
@@ -1762,6 +1798,28 @@ function montarPDF(JsPDF, d){
       d.gastos.map(g=>[fmtCurta(g.data), (g.estabelecimento||"Sem nome")+(g.obs?`\n${g.obs}`:""), g.categoria, g.pagamento||"-", R(g.valor)]),
       { foot:[[{content:"Total dos lançamentos",colSpan:4}, R(d.variaveis)]], columnStyles:{0:{cellWidth:22},4:{halign:"right",cellWidth:28}},
         didParseCell: c=>{ if(c.section==="foot" && c.column.index===4) c.cell.styles.halign="right"; } });
+  if (d.fotos?.length){
+    // grade em colunas: cada foto entra na coluna mais baixa; nova página quando nenhuma comporta
+    const H = doc.internal.pageSize.getHeight(), COLS = 3, GAP = 5, TOPO = 24, BASE = H - 14;
+    const cw = (W - 2*M - GAP*(COLS-1)) / COLS, LEG = 9;
+    const novaPagina = (primeira) => { doc.addPage(); doc.setFont("helvetica","bold"); doc.setFontSize(11); doc.setTextColor(...TINTA);
+      doc.text(primeira ? "Comprovantes" : "Comprovantes (continuação)", M, 18); return Array(COLS).fill(TOPO); };
+    let cols = novaPagina(true);
+    for (const f of d.fotos){
+      let iw = cw, ih = cw * f.h / f.w;
+      const maxH = BASE - TOPO - LEG; if (ih > maxH){ ih = maxH; iw = ih * f.w / f.h; }
+      let c = cols.indexOf(Math.min(...cols));
+      if (cols[c] + ih + LEG > BASE){ cols = novaPagina(false); c = 0; }
+      const x = M + c*(cw+GAP) + (cw-iw)/2, y = cols[c];
+      doc.setDrawColor(...LINHA); doc.setLineWidth(0.2); doc.rect(x-0.3, y-0.3, iw+0.6, ih+0.6);
+      doc.addImage(f.data, "JPEG", x, y, iw, ih, undefined, "FAST");
+      doc.setFont("helvetica","normal"); doc.setFontSize(7.5); doc.setTextColor(...CINZA);
+      const leg = doc.splitTextToSize(f.legenda, cw - 22)[0];
+      doc.text(leg, M + c*(cw+GAP), y + ih + 4);
+      doc.setFont("helvetica","bold"); doc.setTextColor(...TINTA); doc.text(R(f.valor), M + c*(cw+GAP) + cw, y + ih + 4, {align:"right"});
+      cols[c] = y + ih + LEG;
+    }
+  }
   const n = doc.getNumberOfPages();
   for (let i=1;i<=n;i++){ doc.setPage(i); doc.setFontSize(8); doc.setTextColor(...CINZA);
     doc.text(`Página ${i} de ${n}`, W-M, doc.internal.pageSize.getHeight()-8, {align:"right"}); }
