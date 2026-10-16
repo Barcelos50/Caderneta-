@@ -1072,7 +1072,7 @@ function detectarFolha(lum, w, h){
   // contraste mínimo entre papel e fundo
   let sf=0,nf=0,sb=0,nb=0;
   for (let i=0;i<256;i++){ if (i>lim){ sf+=i*hist[i]; nf+=hist[i]; } else { sb+=i*hist[i]; nb+=hist[i]; } }
-  if (!nf || !nb || (sf/nf)-(sb/nb) < 28) return null;
+  if (!nf || !nb || (sf/nf)-(sb/nb) < 22) return null;
   // maior região clara (4-vizinhança)
   const mask = new Uint8Array(w*h); for (let i=0;i<w*h;i++) mask[i] = b[i]>lim ? 1 : 0;
   const lab = new Int32Array(w*h); let atual=0, maior=null;
@@ -1208,29 +1208,38 @@ async function abrirScanner(){
     telaEscolha(); return;
   }
   dicaScanner("Procurando a nota…", "Coloque a nota sobre uma superfície escura e enquadre ela inteira");
-  const PRECISA = 8;          // quadros seguidos parados (~1 segundo)
+  // estável = a nota ficou ~0,45 s no mesmo lugar (tolerando o tremor da mão e falhas isoladas de detecção)
+  const TEMPO_PARADO = 450, TOLERANCIA = 0.04, FALHAS_OK = 3;
+  meu.media = null; meu.desde = 0; meu.falhas = 0; meu.n = 0;
   const passo = () => {
     if (scan!==meu || !meu.ativo) return;
     const v=$("scanVideo");
     if (v.videoWidth){
-      const {lum,w,h,k} = lerLuminancia(v, 320);
+      const agora = performance.now();
+      const {lum,w,h,k} = lerLuminancia(v, 240);
       const det = detectarFolha(lum,w,h);
       if (det && !det.tocaBorda){
         const q = det.q.map(p=>({x:p.x/k, y:p.y/k}));
-        const ant = meu.hist[meu.hist.length-1];
-        const mov = ant ? Math.max(...q.map((p,i)=>dist(p,ant[i]))) / v.videoWidth : 1;
-        if (mov < 0.022) meu.hist.push(q); else meu.hist = [q];
-        const estavel = meu.hist.length >= PRECISA;
-        desenharQuad(q, meu.hist.length>=3);
-        if (estavel){ capturarDocumento(q); return; }
-        dicaScanner(meu.hist.length>=3 ? "Segure firme…" : "Nota encontrada", meu.hist.length>=3 ? "Tirando a foto sozinho" : "Mantenha o celular parado");
+        const mov = meu.media ? Math.max(...q.map((p,i)=>dist(p,meu.media[i]))) / Math.max(v.videoWidth, v.videoHeight) : 1;
+        if (meu.media && mov < TOLERANCIA){
+          meu.media = meu.media.map((m,i)=>({x:m.x*0.6+q[i].x*0.4, y:m.y*0.6+q[i].y*0.4}));   // suaviza o contorno
+          meu.n++;
+        } else { meu.media = q; meu.desde = agora; meu.n = 1; }
+        meu.falhas = 0; meu.hist = [meu.media];
+        const parado = agora - meu.desde;
+        desenharQuad(meu.media, meu.n>=2);
+        if (meu.n>=3 && parado >= TEMPO_PARADO){ capturarDocumento(meu.media); return; }
+        dicaScanner(meu.n>=2 ? "Segure firme…" : "Nota encontrada", meu.n>=2 ? "Tirando a foto sozinho" : "Mantenha o celular parado");
+      } else if (meu.media && ++meu.falhas <= FALHAS_OK){
+        // falha isolada: mantém o contorno e a contagem
       } else {
-        meu.hist = []; desenharQuad(det && det.q.map(p=>({x:p.x/k, y:p.y/k})), false);
+        meu.media = null; meu.n = 0; meu.hist = [];
+        desenharQuad(det && det.q.map(p=>({x:p.x/k, y:p.y/k})), false);
         if (det && det.tocaBorda) dicaScanner("Afaste um pouco o celular", "A nota inteira precisa aparecer na tela");
         else dicaScanner("Procurando a nota…", "Coloque a nota sobre uma superfície escura e enquadre ela inteira");
       }
     }
-    meu.timer = setTimeout(passo, 110);
+    meu.timer = setTimeout(passo, 40);
   };
   passo();
 }
@@ -1240,6 +1249,15 @@ async function capturarDocumento(q){
   const f = document.createElement("canvas"); f.width=v.videoWidth; f.height=v.videoHeight; f.getContext("2d").drawImage(v,0,0);
   $("scan").classList.add("flash"); dicaScanner("✓ Nota capturada");
   try { navigator.vibrate?.(60); } catch(_){}
+  // refaz a detecção no próprio quadro fotografado, para o recorte ficar exato mesmo com a mão tremendo
+  try {
+    const k = 320/Math.max(f.width, f.height), w=Math.round(f.width*k), h=Math.round(f.height*k);
+    const m = document.createElement("canvas"); m.width=w; m.height=h; const mx=m.getContext("2d",{willReadFrequently:true}); mx.drawImage(f,0,0,w,h);
+    const dd = mx.getImageData(0,0,w,h).data, lum = new Uint8ClampedArray(w*h);
+    for (let i=0,j=0;i<lum.length;i++,j+=4) lum[i]=(dd[j]*77+dd[j+1]*150+dd[j+2]*29)>>8;
+    const det = detectarFolha(lum,w,h);
+    if (det && !det.tocaBorda) q = det.q.map(p=>({x:p.x/k, y:p.y/k}));
+  } catch(_){}
   let saida = f;
   if (q){ try { saida = endireitar(f, q); } catch(_){ saida = f; } }
   // procura o QR Code / código de barras também no quadro original, em resolução cheia
