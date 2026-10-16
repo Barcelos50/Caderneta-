@@ -1,5 +1,5 @@
 // Caderneta: guarda o app no aparelho para abrir mesmo sem internet.
-const VERSAO = "caderneta-v3";
+const VERSAO = "caderneta-v4";
 const APP = ["./", "./index.html", "./manifest.webmanifest", "./icon-180.png", "./icon-192.png", "./icon-512.png"];
 const LIBS = [
   "https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js",
@@ -10,7 +10,7 @@ const LIBS = [
 self.addEventListener("install", e => {
   e.waitUntil((async () => {
     const c = await caches.open(VERSAO);
-    await c.addAll(APP);
+    await c.addAll(APP.map(u => new Request(u, { cache: "reload" })));   // ignora o cache do navegador
     await Promise.all(LIBS.map(u => c.add(u).catch(() => {})));
     await self.skipWaiting();
   })());
@@ -31,7 +31,7 @@ self.addEventListener("fetch", e => {
   if (url.origin === location.origin) {                        // o app: busca a versão nova, usa a guardada se offline
     e.respondWith((async () => {
       try {
-        const r = await fetch(req);
+        const r = await fetch(req.url, { cache: "no-cache" });                // sempre confere a versão nova
         if (r.ok) (await caches.open(VERSAO)).put(req, r.clone());
         return r;
       } catch (_) {

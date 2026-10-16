@@ -663,7 +663,13 @@ async function boot(){
     $("mode").textContent = "Não foi possível abrir o armazenamento deste aparelho. Os lançamentos desta visita não serão guardados.";
   }
   render();
-  if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(()=>{});
+  if ("serviceWorker" in navigator){
+    // quando houver versão nova no GitHub, troca e recarrega uma vez sozinho
+    let recarregou = false;
+    navigator.serviceWorker.addEventListener("controllerchange", ()=>{ if (recarregou) return; recarregou = true; location.reload(); });
+    navigator.serviceWorker.register("sw.js", { updateViaCache:"none" }).then(r=>r.update()).catch(()=>{});
+    document.addEventListener("visibilitychange", ()=>{ if (document.visibilityState==="visible") navigator.serviceWorker.getRegistration().then(r=>r?.update()).catch(()=>{}); });
+  }
 }
 
 /* ---------- folha (sheet) ---------- */
