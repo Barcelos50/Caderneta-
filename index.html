@@ -214,7 +214,7 @@ a{color:var(--stamp)}
 .swatches input:focus-visible+span{outline:2px solid var(--stamp);outline-offset:2px}
 .hbtns{display:flex;gap:6px}
 .scan{position:fixed;inset:0;z-index:70;background:#000;display:flex;flex-direction:column}
-.scan video{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
+.scan video{position:absolute;left:0;top:0;width:2px;height:2px;opacity:0;pointer-events:none}
 .scan canvas{position:absolute;inset:0;width:100%;height:100%;pointer-events:none}
 .scan.flash::after{content:"";position:absolute;inset:0;background:#fff;animation:flash .35s ease-out forwards;pointer-events:none}
 @keyframes flash{from{opacity:.85}to{opacity:0}}
@@ -1146,19 +1146,32 @@ function endireitar(fonte, q){
 
 /* --- interface --- */
 function fecharScanner(){
-  if (scan){ scan.ativo=false; clearTimeout(scan.timer); }
+  if (scan){ scan.ativo=false; clearTimeout(scan.timer); cancelAnimationFrame(scan.raf); }
   try { scan?.stream?.getTracks().forEach(t=>t.stop()); } catch(_){}
   const v=$("scanVideo"); if (v) v.srcObject=null;
-  const c=$("scanCanvas"); if (c) c.getContext("2d").clearRect(0,0,c.width,c.height);
+  const c=$("scanCanvas"); if (c){ const x=c.getContext("2d"); x.fillStyle="#000"; x.fillRect(0,0,c.width,c.height); }
   $("scan").hidden=true; $("scan").classList.remove("ok","flash"); document.body.style.overflow=""; scan=null;
 }
 function dicaScanner(t, s){ $("scanDica").innerHTML = `<b>${t}</b>${s?`<span>${s}</span>`:""}`; }
-function desenharQuad(q, estavel){
-  const cv=$("scanCanvas"), v=$("scanVideo"); const r=cv.getBoundingClientRect(), dpr=window.devicePixelRatio||1;
-  if (cv.width!==Math.round(r.width*dpr)){ cv.width=Math.round(r.width*dpr); cv.height=Math.round(r.height*dpr); }
-  const cx=cv.getContext("2d"); cx.clearRect(0,0,cv.width,cv.height);
-  if (!q || !v.videoWidth) return;
-  const esc=Math.max(cv.width/v.videoWidth, cv.height/v.videoHeight), ox=(cv.width-v.videoWidth*esc)/2, oy=(cv.height-v.videoHeight*esc)/2;
+/* prévia: o quadro inteiro da câmera, centralizado e sem cortes, com o contorno da nota por cima */
+function desenharPrevia(){
+  const cv=$("scanCanvas"), v=$("scanVideo"); if (!scan || !cv) return;
+  const r=cv.getBoundingClientRect(), dpr=Math.min(2, window.devicePixelRatio||1);
+  if (cv.width!==Math.round(r.width*dpr) || cv.height!==Math.round(r.height*dpr)){ cv.width=Math.round(r.width*dpr); cv.height=Math.round(r.height*dpr); }
+  const cx=cv.getContext("2d"); cx.fillStyle="#000"; cx.fillRect(0,0,cv.width,cv.height);
+  if (v.videoWidth){
+    const reservado = 150*dpr;   // espaço da dica e dos botões embaixo
+    const esc=Math.min(cv.width/v.videoWidth, (cv.height-reservado)/v.videoHeight);
+    const ox=(cv.width-v.videoWidth*esc)/2, oy=Math.max(0,(cv.height-reservado-v.videoHeight*esc)/2);
+    cx.drawImage(v, ox, oy, v.videoWidth*esc, v.videoHeight*esc);
+    scan.map = {esc, ox, oy, dpr};
+    if (scan.quad) desenharContorno(cx, scan.quad, scan.estavel);
+  }
+  scan.raf = requestAnimationFrame(desenharPrevia);
+}
+function desenharQuad(q, estavel){ if (scan){ scan.quad=q; scan.estavel=estavel; } }
+function desenharContorno(cx, q, estavel){
+  const {esc, ox, oy, dpr} = scan.map;
   const P=q.map(p=>({x:p.x*esc+ox, y:p.y*esc+oy}));
   cx.beginPath(); P.forEach((p,i)=>i?cx.lineTo(p.x,p.y):cx.moveTo(p.x,p.y)); cx.closePath();
   cx.fillStyle = estavel ? "rgba(61,220,132,.22)" : "rgba(43,76,155,.18)"; cx.fill();
@@ -1183,6 +1196,7 @@ async function abrirScanner(){
     const stream = await navigator.mediaDevices.getUserMedia({ audio:false, video:{ facingMode:{ideal:"environment"}, width:{ideal:1920}, height:{ideal:1440} } });
     if (scan!==meu){ stream.getTracks().forEach(t=>t.stop()); return; }
     meu.stream=stream; const v=$("scanVideo"); v.srcObject=stream; await v.play().catch(()=>{});
+    desenharPrevia();
   } catch(e){
     if (scan===meu) fecharScanner();
     toast(e?.name==="NotAllowedError" ? "A câmera foi bloqueada. Libere em Ajustes do iPhone > Safari > Câmera." : "Não consegui abrir a câmera. Use Fotografar a nota.");
