@@ -1814,9 +1814,8 @@ function montarPDF(JsPDF, d){
       doc.setDrawColor(...LINHA); doc.setLineWidth(0.2); doc.rect(x-0.3, y-0.3, iw+0.6, ih+0.6);
       doc.addImage(f.data, "JPEG", x, y, iw, ih, undefined, "FAST");
       doc.setFont("helvetica","normal"); doc.setFontSize(7.5); doc.setTextColor(...CINZA);
-      const leg = doc.splitTextToSize(f.legenda, cw - 22)[0];
+      const leg = doc.splitTextToSize(f.legenda, cw)[0];
       doc.text(leg, M + c*(cw+GAP), y + ih + 4);
-      doc.setFont("helvetica","bold"); doc.setTextColor(...TINTA); doc.text(R(f.valor), M + c*(cw+GAP) + cw, y + ih + 4, {align:"right"});
       cols[c] = y + ih + LEG;
     }
   }
