@@ -1341,7 +1341,20 @@ async function lerPDF(f){
 }
 
 /* ---------- revisão / edição ---------- */
+/* Quando você está vendo outro mês que não o atual, o lançamento novo vai para esse mês */
+function noMesEscolhido(g){
+  const atual = today().slice(0,7);
+  if (state.mes===atual || !/^\d{4}-\d{2}-\d{2}$/.test(g.data||"") || g.data.slice(0,7)===state.mes) return g;
+  const [y,m] = state.mes.split("-").map(Number);
+  const dia = Math.min(Number(g.data.slice(8,10)), new Date(y,m,0).getDate());
+  const original = g.data, lida = original!==today();
+  g.data = `${state.mes}-${String(dia).padStart(2,"0")}`;
+  if (lida) g._aviso = [`A data impressa na nota é ${fmtCurta(original)}. Lancei em ${mesNome(state.mes)}, o mês que você escolheu. Se preferir a data da nota, mude no campo Data.`, g._aviso].filter(Boolean).join(" ");
+  return g;
+}
+
 function telaRevisao(g, erro){
+  if (!state.gastos.some(x=>x.id===g.id) && !g._mesConferido){ g = noMesEscolhido(g); g._mesConferido = true; }
   if (!draft) draft = { id:g.id };
   draft.g = g;
   const dup = g.chave ? state.gastos.find(x=>x.chave===g.chave && x.id!==g.id) : (g.codigoBoleto ? state.gastos.find(x=>x.codigoBoleto===g.codigoBoleto && x.id!==g.id) : null);
