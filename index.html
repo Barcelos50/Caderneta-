@@ -367,7 +367,7 @@ function render(){
   if (limKs.length){
     let usado=0, limTot=0; const estouradas=[];
     limKs.forEach(k=>{
-      const v = doMes.filter(g=>g.categoria===k).reduce((s,g)=>s+(g.valor||0),0) + fxs.filter(f=>f.categoria===k).reduce((s,f)=>s+f.valorMes,0);
+      const v = doMes.filter(g=>g.categoria===k).reduce((s,g)=>s+(g.valor||0),0);
       usado += v; limTot += state.limites[k];
       if (v > state.limites[k]) estouradas.push(k);
     });
@@ -381,7 +381,6 @@ function render(){
   // categorias
   const porCat = {};
   doMes.forEach(g=>{ porCat[g.categoria]=(porCat[g.categoria]||0)+g.valor; });
-  fxs.forEach(f=>{ porCat[f.categoria]=(porCat[f.categoria]||0)+f.valorMes; });
   Object.keys(state.limites).forEach(k=>{ if (state.limites[k]>0 && !(k in porCat)) porCat[k]=0; });
   const lista = Object.entries(porCat).sort((a,b)=>b[1]-a[1] || (state.limites[b[0]]||0)-(state.limites[a[0]]||0));
   $("catSection").hidden = false;
@@ -395,7 +394,7 @@ function render(){
       linha = r>1 ? `<span class="lim over"><span>Passou ${brl.format(v-lim)}</span><span>limite ${brl.format(lim)}</span></span>`
                   : `<span class="lim ${r>=0.8?"warn":""}"><span>Resta ${brl.format(lim-v)}</span><span>limite ${brl.format(lim)}</span></span>`;
     } else {
-      pct = total ? `${Math.round(v/total*100)}% do mês` : ""; larg = v/max*100; cor = catColor(k);
+      pct = (total-fixTot) ? `${Math.round(v/(total-fixTot)*100)}% do mês` : ""; larg = v/max*100; cor = catColor(k);
     }
     return `<button class="cat" data-cat="${esc(k)}" aria-pressed="${state.filtro===k}">
       <span class="nm"><span class="dot" style="background:${catColor(k)}"></span>${esc(k)}<span class="pct">${pct}</span></span>
@@ -1404,7 +1403,7 @@ function telaRevisao(g, erro){
       const lim = state.limites[out.categoria]||0;
       if (lim>0 && out.data.slice(0,7)===state.mes){
         const usado = state.gastos.filter(x=>x.id!==out.id && x.data?.slice(0,7)===state.mes && x.categoria===out.categoria).reduce((s,x)=>s+x.valor,0)
-          + out.valor + fixosDoMes(state.mes).filter(f=>f.categoria===out.categoria).reduce((s,f)=>s+f.valorMes,0);
+          + out.valor;
         const r = usado/lim;
         toast(r>1 ? `Salvo. ${out.categoria} passou ${brl.format(usado-lim)} do limite.` : r>=0.8 ? `Salvo. ${out.categoria} está em ${Math.round(r*100)}% do limite.` : (antigo?"Lançamento atualizado":"Nota salva"));
       } else toast(antigo?"Lançamento atualizado":"Nota salva");
@@ -1583,7 +1582,7 @@ async function removerCategoria(k){
 /* ---------- limites ---------- */
 function telaLimites(){
   abrir("Limites por categoria", `<form id="limForm" novalidate>
-    <p class="muted" style="margin:0;font-size:13px">Defina quanto quer gastar por mês em cada categoria. Deixe em branco para não ter limite. Os gastos fixos contam dentro do limite da categoria deles.</p>
+    <p class="muted" style="margin:0;font-size:13px">Defina quanto quer gastar por mês em cada categoria. Deixe em branco para não ter limite. Os gastos fixos não entram nos limites.</p>
     <div class="limgrid">${CATS.map((c,i)=>`<div class="field"><label for="lim${i}"><span class="dot" style="background:${catColor(c.k)}"></span>${esc(c.k)}</label>
       <input id="lim${i}" class="money" inputmode="decimal" placeholder="Sem limite" value="${state.limites[c.k]?esc(num2.format(state.limites[c.k])):""}"></div>`).join("")}</div>
     <div class="muted" style="display:flex;justify-content:space-between;font-size:13px"><span>Limite total do mês</span><b class="mono" id="limTot"></b></div>
@@ -1666,7 +1665,6 @@ function dadosExport(per, cats){
   }).filter(m=>per==="mes" || m.total>0);
   const porCat = {};
   gastos.forEach(g=>{ porCat[g.categoria]=(porCat[g.categoria]||0)+g.valor; });
-  porMes.forEach(m=>m.fx.forEach(x=>{ porCat[x.categoria]=(porCat[x.categoria]||0)+x.valorMes; }));
   const total = porMes.reduce((s,m)=>s+m.total,0);
   return { per, meses, gastos, porMes, porCat:Object.entries(porCat).sort((a,b)=>b[1]-a[1]), total,
     variaveis: porMes.reduce((s,m)=>s+m.variaveis,0), fixos: porMes.reduce((s,m)=>s+m.fixos,0),
@@ -1811,8 +1809,8 @@ function montarPDF(JsPDF, d){
       { columnStyles:{1:{halign:"right"},2:{halign:"right"},3:{halign:"right",cellWidth:18}},
         didParseCell: c=>{ if(c.section==="body" && c.column.index===3){ const l=state.limites[c.row.raw[0]]||0; const v=(cats.find(([k])=>k===c.row.raw[0])||[0,0])[1]; if(l && v>l){ c.cell.styles.textColor=[179,38,30]; c.cell.styles.fontStyle="bold"; } } } });
   } else if (d.porCat.length)
-    tabela("Por categoria", ["Categoria","Valor","% do total"],
-      d.porCat.map(([k,v])=>[k, R(v), d.total?`${Math.round(v/d.total*100)}%`:"-"]),
+    tabela("Por categoria", ["Categoria","Valor","%"],
+      d.porCat.map(([k,v])=>[k, R(v), d.variaveis?`${Math.round(v/d.variaveis*100)}%`:"-"]),
       { columnStyles:{1:{halign:"right"},2:{halign:"right",cellWidth:24}} });
   const fixRows = d.per==="mes"
     ? (d.porMes[0]?.fx||[]).map(x=>[x.nome, x.categoria, R(x.valorMes)])
